@@ -1,0 +1,7 @@
+[package]
+name = "rtorrentd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+librtorrent = { path = "../librtorrent" }

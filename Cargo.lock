@@ -3,5 +3,19 @@
 version = 3
 
 [[package]]
-name = "rtorrent"
+name = "librtorrent"
 version = "0.1.0"
+
+[[package]]
+name = "rtorrent-cli"
+version = "0.1.0"
+dependencies = [
+ "librtorrent",
+]
+
+[[package]]
+name = "rtorrentd"
+version = "0.1.0"
+dependencies = [
+ "librtorrent",
+]
