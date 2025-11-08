@@ -1,3 +1,1 @@
-fn main() {
-    librtorrent::test();
-}
+fn main() {}
