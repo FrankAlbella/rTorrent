@@ -1,3 +1,1 @@
-pub fn test() {
-    println!("Hello, world!");
-}
+pub mod bencode;
