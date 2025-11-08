@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    fmt::Display,
-    hash::{DefaultHasher, Hash, Hasher},
-    iter::Peekable,
-};
+use std::{collections::BTreeMap, fmt::Display, iter::Peekable};
 
 const INT_PREFIX: u8 = b'i';
 const INT_SUFFIX: u8 = b'e';
@@ -22,65 +17,20 @@ const ERROR_NOT_ENOUGH_CHARS: &str = "Not enough characters";
 const ERROR_INVALID_KEY: &str = "Invalid key. Keys must be of type String";
 const ERROR_INVALID_UTF8: &str = "Error converting bytes to UTF8";
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum BencodeType {
     Integer(i64),
     List(Vec<BencodeType>),
-    Dictionary(HashMap<BencodeType, BencodeType>),
+    Dictionary(BencodeMap),
     String(Vec<u8>),
 }
 
-impl PartialEq for BencodeType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (BencodeType::Integer(x), BencodeType::Integer(y)) => x == y,
-            (BencodeType::List(x), BencodeType::List(y)) => x == y,
-            (BencodeType::Dictionary(x), BencodeType::Dictionary(y)) => {
-                if x.len() != y.len() {
-                    return false;
-                }
-
-                x.iter().all(|(key, value)| y.get(key) == Some(value))
-            }
-            (BencodeType::String(x), BencodeType::String(y)) => x == y,
-            _ => false,
-        }
-    }
+pub enum BencodeGetErr {
+    InvalidType,
+    InvalidUtf8,
 }
 
-impl Hash for BencodeType {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            BencodeType::Integer(x) => {
-                state.write_u8(0);
-                x.hash(state);
-            }
-            BencodeType::List(x) => {
-                state.write_u8(1);
-                x.hash(state);
-            }
-            BencodeType::Dictionary(x) => {
-                state.write_u8(2);
-                let mut kvs: Vec<_> = x.iter().collect();
-                kvs.sort_by_key(|(k, _)| {
-                    let mut hasher = DefaultHasher::new();
-                    k.hash(&mut hasher);
-                    hasher.finish()
-                });
-                for (k, v) in kvs {
-                    k.hash(state);
-                    v.hash(state);
-                }
-            }
-            BencodeType::String(x) => {
-                state.write_u8(3);
-                x.hash(state);
-            }
-        }
-    }
-}
-
-impl Eq for BencodeType {}
+pub type BencodeMap = BTreeMap<Vec<u8>, BencodeType>;
 
 impl Display for BencodeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -92,6 +42,22 @@ impl Display for BencodeType {
             },
             BencodeType::Dictionary(x) => write!(f, "Dictionary({x:?})"),
             BencodeType::List(x) => write!(f, "List({x:?}"),
+        }
+    }
+}
+
+impl BencodeType {
+    pub fn get_string(self: &Self) -> Result<Vec<u8>, BencodeGetErr> {
+        match self {
+            Self::String(x) => Ok(x.clone()),
+            _ => Err(BencodeGetErr::InvalidType),
+        }
+    }
+
+    pub fn get_utf8_string(self: &Self) -> Result<String, BencodeGetErr> {
+        match self {
+            Self::String(x) => String::from_utf8(x.clone()).map_err(|_| BencodeGetErr::InvalidUtf8),
+            _ => Err(BencodeGetErr::InvalidUtf8),
         }
     }
 }
@@ -198,13 +164,13 @@ fn read_dictionary(
     match iter.next() {
         Some(x) if x == DICTIONARY_PREFIX => {}
         _ => {
-            return Err(BencodeParseErr::InvalidListBencode(String::from(
+            return Err(BencodeParseErr::InvalidDictionaryBencode(String::from(
                 ERROR_MISSING_PREFIX,
             )));
         }
     }
 
-    let mut result: HashMap<BencodeType, BencodeType> = HashMap::new();
+    let mut result: BencodeMap = BencodeMap::new();
     while let Some(x) = iter.peek() {
         match x {
             &DICTIONARY_SUFFIX => {
@@ -212,7 +178,9 @@ fn read_dictionary(
                 return Ok(BencodeType::Dictionary(result));
             }
             b'0'..=b'9' => {
-                let key = read_value(iter)?;
+                let key = read_value(iter)?.get_string().map_err(|_| {
+                    BencodeParseErr::InvalidDictionaryBencode(String::from(ERROR_INVALID_KEY))
+                })?;
                 let value = read_value(iter)?;
                 result.insert(key, value);
             }
@@ -442,16 +410,86 @@ mod tests {
     #[test]
     fn read_dictionary_success() {
         let mut data = "d3:cow3:moo4:spam4:eggse".bytes().into_iter().peekable();
-        let mut map: HashMap<BencodeType, BencodeType> = HashMap::new();
+        let mut map: BencodeMap = BencodeMap::new();
         map.insert(
-            BencodeType::String(String::from("cow").into_bytes()),
+            String::from("cow").into_bytes(),
             BencodeType::String(String::from("moo").into_bytes()),
         );
         map.insert(
-            BencodeType::String(String::from("spam").into_bytes()),
+            String::from("spam").into_bytes(),
             BencodeType::String(String::from("eggs").into_bytes()),
         );
         let expected = Ok(BencodeType::Dictionary(map));
+
+        let result = read_dictionary(&mut data);
+
+        assert_eq!(result, expected)
+    }
+
+    #[test]
+    fn read_dictionary_nested_map() {
+        let mut data = "d3:cow3:moo4:spam4:eggs4:dictd3:key5:valueee"
+            .bytes()
+            .into_iter()
+            .peekable();
+
+        let mut map: BencodeMap = BencodeMap::new();
+        map.insert(
+            String::from("cow").into_bytes(),
+            BencodeType::String(String::from("moo").into_bytes()),
+        );
+        map.insert(
+            String::from("spam").into_bytes(),
+            BencodeType::String(String::from("eggs").into_bytes()),
+        );
+
+        let mut nested: BencodeMap = BencodeMap::new();
+        nested.insert(
+            String::from("key").into_bytes(),
+            BencodeType::String(String::from("value").into_bytes()),
+        );
+        map.insert(
+            String::from("dict").into_bytes(),
+            BencodeType::Dictionary(nested),
+        );
+
+        let expected = Ok(BencodeType::Dictionary(map));
+
+        let result = read_dictionary(&mut data);
+
+        assert_eq!(result, expected)
+    }
+
+    #[test]
+    fn read_dictionary_missing_prefix() {
+        let mut data = "3:cow3:moo4:spam4:eggse".bytes().into_iter().peekable();
+        let expected = Err(BencodeParseErr::InvalidDictionaryBencode(String::from(
+            ERROR_MISSING_PREFIX,
+        )));
+
+        let result = read_dictionary(&mut data);
+
+        assert_eq!(result, expected)
+    }
+
+    #[test]
+    fn read_dictionary_invalid_key() {
+        let mut data = "die33:moo4:spam4:eggse".bytes().into_iter().peekable();
+        let expected = Err(BencodeParseErr::InvalidDictionaryBencode(String::from(
+            ERROR_INVALID_KEY,
+        )));
+
+        let result = read_dictionary(&mut data);
+
+        assert_eq!(result, expected)
+    }
+
+    #[test]
+    fn read_dictionary_missing_suffix() {
+        let mut data = "d3:cow3:moo4:spam4:eggs".bytes().into_iter().peekable();
+        let expected = Err(BencodeParseErr::InvalidDictionaryBencode(String::from(
+            ERROR_MISSING_SUFFIX,
+        )));
 
         let result = read_dictionary(&mut data);
 
