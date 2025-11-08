@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Display, iter::Peekable};
+use std::{collections::BTreeMap, fmt::Display, iter::Peekable, path::PathBuf};
 
 const INT_PREFIX: u8 = b'i';
 const INT_SUFFIX: u8 = b'e';
@@ -25,12 +25,108 @@ pub enum BencodeType {
     String(Vec<u8>),
 }
 
+#[derive(Debug)]
 pub enum BencodeGetErr {
     InvalidType,
     InvalidUtf8,
+    InvalidConversion,
+    NotFound,
 }
 
 pub type BencodeMap = BTreeMap<Vec<u8>, BencodeType>;
+
+impl TryFrom<&BencodeType> for String {
+    type Error = BencodeGetErr;
+    fn try_from(value: &BencodeType) -> Result<Self, Self::Error> {
+        value.get_utf8_string()
+    }
+}
+
+impl TryFrom<&BencodeType> for i64 {
+    type Error = BencodeGetErr;
+    fn try_from(value: &BencodeType) -> Result<Self, Self::Error> {
+        match value {
+            BencodeType::Integer(x) => Ok(x.clone()),
+            _ => Err(BencodeGetErr::InvalidConversion),
+        }
+    }
+}
+
+impl TryFrom<&BencodeType> for BencodeMap {
+    type Error = BencodeGetErr;
+    fn try_from(value: &BencodeType) -> Result<Self, Self::Error> {
+        match value {
+            BencodeType::Dictionary(x) => Ok(x.clone()),
+            _ => Err(BencodeGetErr::InvalidConversion),
+        }
+    }
+}
+
+impl<'a, T> TryFrom<&'a BencodeType> for Vec<T>
+where
+    T: TryFrom<&'a BencodeType, Error = BencodeGetErr>,
+{
+    type Error = BencodeGetErr;
+    fn try_from(value: &'a BencodeType) -> Result<Self, Self::Error> {
+        match value {
+            BencodeType::List(x) => x.iter().map(T::try_from).collect::<Result<Vec<T>, _>>(),
+            _ => Err(BencodeGetErr::InvalidConversion),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a BencodeType> for Vec<u8> {
+    type Error = BencodeGetErr;
+    fn try_from(value: &'a BencodeType) -> Result<Self, Self::Error> {
+        match value {
+            BencodeType::String(x) => Ok(x.clone()),
+            _ => Err(BencodeGetErr::InvalidConversion),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a BencodeType> for PathBuf {
+    type Error = BencodeGetErr;
+    fn try_from(value: &'a BencodeType) -> Result<Self, Self::Error> {
+        match value {
+            BencodeType::String(_) => Ok(PathBuf::from(value.get_utf8_string()?)),
+            _ => Err(BencodeGetErr::InvalidConversion),
+        }
+    }
+}
+
+// TODO: update T to accept TryInfo instead;
+// https://doc.rust-lang.org/std/convert/trait.TryFrom.html
+pub trait BencodeMapDecoder {
+    fn get_decode<'a, T>(self: &'a Self, key: &str) -> Option<T>
+    where
+        T: TryFrom<&'a BencodeType>;
+    fn print_keys(self: &Self);
+}
+
+impl BencodeMapDecoder for BencodeMap {
+    fn get_decode<'a, T>(self: &'a Self, key: &str) -> Option<T>
+    where
+        T: TryFrom<&'a BencodeType>,
+    {
+        let str_as_bytes = key.as_bytes();
+        match self.get(str_as_bytes) {
+            Some(x) => T::try_from(x).ok(),
+            _ => None,
+        }
+    }
+
+    fn print_keys(self: &Self) {
+        let mut iter = self.keys().into_iter();
+        while let Some(x) = iter.next() {
+            if let Ok(y) = String::from_utf8(x.clone()) {
+                println!("{y}");
+            } else {
+                println!("{}", ERROR_INVALID_KEY);
+            }
+        }
+    }
+}
 
 impl Display for BencodeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
