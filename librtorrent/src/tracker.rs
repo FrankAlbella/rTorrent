@@ -54,6 +54,8 @@ enum TrackerEvent {
     Stopped,
 }
 
+// TODO implement with thiserror::Error
+#[derive(Debug)]
 pub enum TrackerErr {
     InvalidMetaInfo,
     UrlParseError(ParseError),
