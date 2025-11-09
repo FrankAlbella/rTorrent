@@ -7,7 +7,7 @@ async fn main() {
     // let args: Vec<String> = env::args().collect();
     //let file_path = &args[1];
 
-    let file_path = PathBuf::from("torrent_files/debian-13.1.0-amd64-netinst.iso.torrent");
+    let file_path = PathBuf::from("test/torrent_files/debian-13.1.0-amd64-netinst.iso.torrent");
     let contents = fs::read(file_path).expect("Should have been able to read the file");
 
     let bencode_vec = librtorrent::bencode::decode_to_vec(&contents).unwrap();
