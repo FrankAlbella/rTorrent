@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 librtorrent = { path = "../librtorrent" }
+tokio = "1.48.0"

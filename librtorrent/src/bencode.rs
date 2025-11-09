@@ -16,6 +16,7 @@ const ERROR_NEGATIVE_ZERO: &str = "-0 is an invalid integer";
 const ERROR_NOT_ENOUGH_CHARS: &str = "Not enough characters";
 const ERROR_INVALID_KEY: &str = "Invalid key. Keys must be of type String";
 const ERROR_INVALID_UTF8: &str = "Error converting bytes to UTF8";
+const ERROR_INVALID_DICT: &str = "Invalid dictionary";
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum BencodeType {
@@ -101,6 +102,7 @@ pub trait BencodeMapDecoder {
     fn get_decode<'a, T>(self: &'a Self, key: &str) -> Option<T>
     where
         T: TryFrom<&'a BencodeType>;
+    fn try_decode(bytes: &Vec<u8>) -> Result<BencodeMap, BencodeParseErr>;
     fn print_keys(self: &Self);
 }
 
@@ -113,6 +115,20 @@ impl BencodeMapDecoder for BencodeMap {
         match self.get(str_as_bytes) {
             Some(x) => T::try_from(x).ok(),
             _ => None,
+        }
+    }
+
+    fn try_decode(bytes: &Vec<u8>) -> Result<BencodeMap, BencodeParseErr> {
+        match bytes.first() {
+            Some(_) => match read_dictionary(&mut bytes.iter().cloned().peekable().clone())? {
+                BencodeType::Dictionary(x) => Ok(x),
+                _ => Err(BencodeParseErr::InvalidDictionaryBencode(String::from(
+                    ERROR_INVALID_DICT,
+                ))),
+            },
+            None => Err(BencodeParseErr::InvalidDictionaryBencode(String::from(
+                ERROR_MISSING_PREFIX,
+            ))),
         }
     }
 
