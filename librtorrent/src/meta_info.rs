@@ -95,11 +95,11 @@ impl FromBencodemap for FileInfo {
         }
 
         let length: i64 = bencode_map
-            .get_decode(NAME_KEY)
-            .ok_or(FromBencodeTypeErr::MissingValue(String::from(PIECES_KEY)))?;
+            .get_decode(LENGTH_KEY)
+            .ok_or(FromBencodeTypeErr::MissingValue(String::from(LENGTH_KEY)))?;
         let path: Vec<PathBuf> = bencode_map
-            .get_decode(PIECE_LENGTH_KEY)
-            .ok_or(FromBencodeTypeErr::MissingValue(String::from(PIECES_KEY)))?;
+            .get_decode(PATH_KEY)
+            .ok_or(FromBencodeTypeErr::MissingValue(String::from(PATH_KEY)))?;
 
         Ok(FileInfo {
             length: length,
@@ -121,8 +121,6 @@ impl FromBencodemap for TorrentInfo {
             )));
         }
 
-        bencode_map.print_keys();
-
         let name: String = bencode_map
             .get_decode(NAME_KEY)
             .ok_or(FromBencodeTypeErr::MissingValue(String::from(NAME_KEY)))?;
@@ -141,7 +139,8 @@ impl FromBencodemap for TorrentInfo {
 
         let mut final_vec = Vec::new();
         if let Some(files_vec) = files {
-            while let Some(x) = files_vec.iter().next() {
+            let mut iter = files_vec.iter();
+            while let Some(x) = iter.next() {
                 final_vec.push(FileInfo::from_bencodemap(x)?);
             }
         }
