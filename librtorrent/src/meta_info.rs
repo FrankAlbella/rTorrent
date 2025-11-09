@@ -37,34 +37,34 @@ impl From<BencodeGetErr> for FromBencodeTypeErr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MetaInfo {
-    announce: Option<String>,
-    info: TorrentInfo,
+    pub announce: Option<String>,
+    pub info: TorrentInfo,
     //BEP-0005
-    nodes: Option<Vec<String>>,
+    pub nodes: Option<Vec<String>>,
     //BEP-0012
-    announce_list: Option<Vec<String>>,
+    pub announce_list: Option<Vec<String>>,
     //BEP-0019
-    url_list: Option<Vec<String>>,
-    hash: [u8; 20],
+    pub url_list: Option<Vec<String>>,
+    pub hash: [u8; 20],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TorrentInfo {
-    name: String,
-    piece_length: i64,
-    pieces: Vec<u8>,
-    length: Option<i64>,
-    files: Option<Vec<FileInfo>>,
+    pub name: String,
+    pub piece_length: i64,
+    pub pieces: Vec<u8>,
+    pub length: Option<i64>,
+    pub files: Option<Vec<FileInfo>>,
     //BEP-0027
-    private: Option<i64>,
+    pub private: Option<i64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileInfo {
-    length: i64,
-    path: Vec<PathBuf>,
+    pub length: i64,
+    pub path: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -192,9 +192,9 @@ impl FromBencodemap for MetaInfo {
             )));
         }
 
-        let announce: Option<String> = bencode_map.get_decode(ANNOUNCE_LIST_KEY);
+        let announce: Option<String> = bencode_map.get_decode(ANNOUNCE_KEY);
         let nodes: Option<Vec<String>> = bencode_map.get_decode(NODES_KEY);
-        let announce_list: Option<Vec<String>> = bencode_map.get_decode(ANNOUNCE_KEY);
+        let announce_list: Option<Vec<String>> = bencode_map.get_decode(ANNOUNCE_LIST_KEY);
         let url_list: Option<Vec<String>> = bencode_map.get_decode(URL_LIST_KEY);
 
         let info: BencodeMap = bencode_map
