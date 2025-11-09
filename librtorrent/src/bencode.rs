@@ -128,6 +128,17 @@ impl BencodeMapDecoder for BencodeMap {
     }
 }
 
+pub trait BencodeMapEncoder {
+    fn get_encode(self: &Self) -> Vec<u8>;
+}
+
+impl BencodeMapEncoder for BencodeMap {
+    fn get_encode(self: &Self) -> Vec<u8> {
+        let wrapper = BencodeType::Dictionary(self.clone());
+        encode(&wrapper)
+    }
+}
+
 impl Display for BencodeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -318,8 +329,55 @@ fn read_string(iter: &mut impl Iterator<Item = u8>) -> Result<BencodeType, Benco
     Ok(BencodeType::String(result))
 }
 
-pub fn encode(_value: &str) -> String {
-    todo!()
+fn encode_string(bytes: &Vec<u8>) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(bytes.len().to_string().as_bytes());
+    buffer.push(STRING_DELIMITER);
+    buffer.extend_from_slice(&bytes);
+
+    buffer
+}
+
+pub fn encode(value: &BencodeType) -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    match value {
+        BencodeType::Integer(x) => {
+            buffer.push(INT_PREFIX);
+            buffer.extend_from_slice(x.to_string().as_bytes());
+            buffer.push(INT_SUFFIX);
+        }
+        BencodeType::String(x) => {
+            buffer.extend_from_slice(&encode_string(x));
+        }
+        BencodeType::List(x) => {
+            buffer.push(LIST_PREFIX);
+            for item in x {
+                buffer.extend_from_slice(&encode(item));
+            }
+            buffer.push(LIST_SUFFIX);
+        }
+        BencodeType::Dictionary(x) => {
+            buffer.push(DICTIONARY_PREFIX);
+            for (key, value) in x {
+                buffer.extend_from_slice(&encode_string(key));
+                buffer.extend_from_slice(&encode(value));
+            }
+            buffer.push(DICTIONARY_SUFFIX);
+        }
+    }
+
+    buffer
+}
+
+pub fn encode_vec(values: &Vec<BencodeType>) -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    for x in values {
+        buffer.extend_from_slice(&encode(&x));
+    }
+
+    buffer
 }
 
 #[cfg(test)]

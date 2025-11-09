@@ -1,6 +1,6 @@
+use crate::bencode::{BencodeGetErr, BencodeMap, BencodeMapDecoder, BencodeMapEncoder};
+use sha1::{Digest, Sha1};
 use std::path::PathBuf;
-
-use crate::bencode::{BencodeGetErr, BencodeMap, BencodeMapDecoder};
 
 // Keys for the root of the meta info file
 const ANNOUNCE_KEY: &str = "announce";
@@ -47,6 +47,7 @@ pub struct MetaInfo {
     announce_list: Option<Vec<String>>,
     //BEP-0019
     url_list: Option<Vec<String>>,
+    hash: [u8; 20],
 }
 
 #[derive(Debug)]
@@ -206,6 +207,7 @@ impl FromBencodemap for MetaInfo {
             nodes: nodes,
             announce_list: announce_list,
             url_list: url_list,
+            hash: Sha1::digest(info.get_encode()).into(),
         })
     }
 
