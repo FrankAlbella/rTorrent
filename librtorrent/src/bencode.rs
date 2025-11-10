@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, fmt::Display, iter::Peekable, path::PathBuf};
 
+use thiserror::Error;
+
 const INT_PREFIX: u8 = b'i';
 const INT_SUFFIX: u8 = b'e';
 const LIST_PREFIX: u8 = b'l';
@@ -26,12 +28,14 @@ pub enum BencodeType {
     String(Vec<u8>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum BencodeGetErr {
+    #[error("Invalid type, must be string")]
     InvalidType,
+    #[error("Invalid UTF-8 String")]
     InvalidUtf8,
+    #[error("Invalid conversion to provided type")]
     InvalidConversion,
-    NotFound,
 }
 
 pub type BencodeMap = BTreeMap<Vec<u8>, BencodeType>;
@@ -185,13 +189,19 @@ impl BencodeType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum BencodeParseErr {
+    #[error("Empty bencode")]
     EmptyBencode,
+    #[error("Invalid bencode type found")]
     InvalidBencode(String),
+    #[error("Invalid integer bencode type found")]
     InvalidIntegerBencode(String),
+    #[error("Invalid list bencode type found")]
     InvalidListBencode(String),
+    #[error("Invalid dictionary bencode type found")]
     InvalidDictionaryBencode(String),
+    #[error("Invalid string bencode type found")]
     InvalidStringBencode(String),
 }
 

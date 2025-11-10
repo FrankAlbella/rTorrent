@@ -1,6 +1,7 @@
 use crate::bencode::{BencodeGetErr, BencodeMap, BencodeMapDecoder, BencodeMapEncoder};
 use sha1::{Digest, Sha1};
 use std::path::PathBuf;
+use thiserror::Error;
 
 // Keys for the root of the meta info file
 const ANNOUNCE_KEY: &str = "announce";
@@ -25,16 +26,12 @@ const PATH_KEY: &str = "path";
 
 const ERROR_MISSING_VALUE: &str = "Map is missing required values";
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FromBencodeTypeErr {
+    #[error("Map is missing required values")]
     MissingValue(String),
-    BencodeGetErr(BencodeGetErr),
-}
-
-impl From<BencodeGetErr> for FromBencodeTypeErr {
-    fn from(value: BencodeGetErr) -> Self {
-        Self::BencodeGetErr(value)
-    }
+    #[error("Failed to get bencode")]
+    BencodeGetErr(#[from] BencodeGetErr),
 }
 
 #[derive(Debug, Clone)]

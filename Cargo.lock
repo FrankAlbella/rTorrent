@@ -675,6 +675,7 @@ dependencies = [
  "serde",
  "serde_qs",
  "sha1",
+ "thiserror",
  "tokio",
  "url",
 ]
