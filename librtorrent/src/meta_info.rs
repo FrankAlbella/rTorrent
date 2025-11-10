@@ -138,6 +138,7 @@ impl FromBencodemap for TorrentInfo {
         let files: Option<Vec<BencodeMap>> = bencode_map.get_decode(FILES_KEY);
         let private: Option<i64> = bencode_map.get_decode(PRIVATE_KEY);
 
+        // TODO: rewrite this logic
         let mut final_vec = Vec::new();
         if let Some(files_vec) = files {
             let mut iter = files_vec.iter();

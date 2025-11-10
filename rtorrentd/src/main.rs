@@ -26,17 +26,18 @@ async fn main() {
                 let mut handles = Vec::new();
 
                 if let Ok(res) = response {
-                    let mut peers = res.peers.iter();
-
-                    if let Some(peers_vec) = peers.next() {
-                        let mut peers_iter = peers_vec.iter();
-                        while let Some(peer) = peers_iter.next() {
+                    if let Some(peers_vec) = res.peers {
+                        for peer in peers_vec {
                             let hash_clone = data.hash.clone();
                             let peer_clone = peer.clone();
                             handles.push(tokio::spawn(async move {
-                                peer_clone
+                                match peer_clone
                                     .connect(&Handshake::new(hash_clone, [0; 20]))
-                                    .await;
+                                    .await
+                                {
+                                    Ok(_) => println!("Connected to peer"),
+                                    Err(e) => println!("Failed to connect to peer: {:#?}", e),
+                                }
                             }));
                         }
                     }
@@ -45,8 +46,6 @@ async fn main() {
                 for handle in handles {
                     handle.await.expect("Task panicked");
                 }
-
-                dbg!();
             }
             _ => println!(),
         },

@@ -46,6 +46,7 @@ impl FromBencodemap for Peer {
     }
 }
 
+#[derive(Debug)]
 pub enum ConnectionErr {
     TokioError(std::io::Error),
     InvalidHandshake,
@@ -63,15 +64,9 @@ impl Peer {
 
     /// Establishes a connection and performs handshake with peer
     pub async fn connect(self: &Self, handshake: &Handshake) -> Result<TcpStream, ConnectionErr> {
-        let stream_result = TcpStream::connect(format!("{}:{}", self.ip, self.port)).await;
-
-        let mut stream;
-        match stream_result {
-            Ok(x) => stream = x,
-            Err(e) => {
-                return Err(ConnectionErr::TokioError(e));
-            }
-        }
+        let mut stream = TcpStream::connect(format!("{}:{}", self.ip, self.port))
+            .await
+            .map_err(|e| ConnectionErr::TokioError(e))?;
 
         loop {
             let ready = stream.ready(Interest::WRITABLE).await.unwrap();
@@ -79,14 +74,12 @@ impl Peer {
             if ready.is_writable() {
                 match stream.write_all(&handshake.to_bytes()).await {
                     Ok(_) => {
-                        println!("Success: wrote to peer");
                         break;
                     }
                     Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                         continue;
                     }
                     Err(e) => {
-                        println!("Failed to write to peer");
                         return Err(ConnectionErr::TokioError(e));
                     }
                 }
@@ -99,21 +92,14 @@ impl Peer {
             if ready.is_readable() {
                 let mut buf: [u8; crate::handshake::TOTAL_SIZE] = [0; crate::handshake::TOTAL_SIZE];
                 match stream.try_read(&mut buf) {
-                    Ok(bytes) => {
-                        println!("Success: read from peer");
-                        dbg!(bytes);
-                        //dbg!(buf);
-                        let their_hs = Handshake::from_bytes(&buf.to_vec()).unwrap();
-                        if their_hs.is_valid(&handshake) {
-                            println!("Handshake verified");
-                        }
-                        return Ok(stream);
-                    }
+                    Ok(_) => match Handshake::from_bytes(&buf.to_vec()) {
+                        Ok(their_hs) if their_hs.is_valid(&handshake) => return Ok(stream),
+                        _ => return Err(ConnectionErr::InvalidHandshake),
+                    },
                     Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                         continue;
                     }
                     Err(e) => {
-                        println!("Failed to read from peer");
                         return Err(ConnectionErr::TokioError(e));
                     }
                 };
