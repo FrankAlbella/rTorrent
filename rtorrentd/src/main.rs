@@ -1,6 +1,10 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
-use librtorrent::{bencode::BencodeType, meta_info::FromBencodemap, meta_info::MetaInfo};
+use librtorrent::{
+    bencode::BencodeType,
+    handshake::Handshake,
+    meta_info::{FromBencodemap, MetaInfo},
+};
 
 #[tokio::main]
 async fn main() {
@@ -17,11 +21,32 @@ async fn main() {
     match iter.next() {
         Some(x) => match x {
             BencodeType::Dictionary(x) => {
-                let data = MetaInfo::from_bencodemap(x).unwrap();
+                let data = Arc::new(MetaInfo::from_bencodemap(x).unwrap());
+                let response = librtorrent::tracker::send_get_request(&data).await;
+                let mut handles = Vec::new();
 
-                //dbg!(data.clone());
+                if let Ok(res) = response {
+                    let mut peers = res.peers.iter();
 
-                dbg!(librtorrent::tracker::send_get_request(&data).await.unwrap());
+                    if let Some(peers_vec) = peers.next() {
+                        let mut peers_iter = peers_vec.iter();
+                        while let Some(peer) = peers_iter.next() {
+                            let hash_clone = data.hash.clone();
+                            let peer_clone = peer.clone();
+                            handles.push(tokio::spawn(async move {
+                                peer_clone
+                                    .connect(&Handshake::new(hash_clone, [0; 20]))
+                                    .await;
+                            }));
+                        }
+                    }
+                }
+
+                for handle in handles {
+                    handle.await.expect("Task panicked");
+                }
+
+                dbg!();
             }
             _ => println!(),
         },

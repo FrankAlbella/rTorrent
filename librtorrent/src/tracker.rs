@@ -1,6 +1,7 @@
 use crate::{
     bencode::{BencodeMap, BencodeMapDecoder, BencodeParseErr},
     meta_info::{FromBencodeTypeErr, FromBencodemap},
+    peer::Peer,
 };
 use reqwest::{Client, Url};
 use serde::Serialize;
@@ -14,11 +15,6 @@ use crate::meta_info::{MetaInfo, TorrentType};
 const INTERVAL_KEY: &str = "interval";
 const PEERS_KEY: &str = "peers";
 const FAILURE_REASON_KEY: &str = "failure reason";
-
-// Peer keys
-const PEER_ID_KEY: &str = "peer id";
-const IP_KEY: &str = "ip";
-const PORT_KEY: &str = "port";
 
 // ERRORS
 
@@ -40,13 +36,6 @@ pub struct GetResponse {
     pub failure_reason: Option<String>,
 }
 
-#[derive(Debug)]
-pub struct Peer {
-    pub peer_id: Option<String>,
-    pub ip: String,
-    pub port: i64,
-}
-
 #[derive(Serialize)]
 enum TrackerEvent {
     Started,
@@ -63,42 +52,6 @@ pub enum TrackerErr {
     FromBencodeTypeErr(FromBencodeTypeErr),
     ReqwestError(reqwest::Error),
     SerdeErr(serde_qs::Error),
-}
-
-impl FromBencodemap for Peer {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<Self, FromBencodeTypeErr> {
-        if !Self::is_valid_bencodemap(bencode_map) {
-            return Err(FromBencodeTypeErr::MissingValue(String::from(
-                "Missing values for peer",
-            )));
-        }
-
-        // Safe unwraps because we checked the values exist in the map above
-        let peer_id: Option<String> = bencode_map.get_decode(PEER_ID_KEY);
-        let ip: String = bencode_map.get_decode(IP_KEY).unwrap();
-        let port: i64 = bencode_map.get_decode(PORT_KEY).unwrap();
-
-        Ok(Peer {
-            peer_id: peer_id,
-            ip: ip,
-            port: port,
-        })
-    }
-
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
-        bencode_map.contains_key(IP_KEY.as_bytes()) && bencode_map.contains_key(PORT_KEY.as_bytes())
-    }
-}
-
-impl Peer {
-    fn from_bencodemap_list(
-        bencode_map: &Vec<BencodeMap>,
-    ) -> Result<Vec<Self>, FromBencodeTypeErr> {
-        bencode_map
-            .iter()
-            .map(|x| Peer::from_bencodemap(x))
-            .collect()
-    }
 }
 
 impl FromBencodemap for GetResponse {
