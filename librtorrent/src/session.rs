@@ -5,6 +5,7 @@ use log::warn;
 use crate::torrent::Torrent;
 
 pub struct Session {
+    // TODO: this could be a HashMap with info_hash as key
     torrents: Vec<Torrent>,
 }
 

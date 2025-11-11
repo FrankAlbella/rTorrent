@@ -1,4 +1,4 @@
-use librtorrent::session::{self, Session};
+use librtorrent::session::Session;
 
 #[tokio::main]
 async fn main() {
