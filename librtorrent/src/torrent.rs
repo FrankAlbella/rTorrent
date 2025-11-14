@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf, sync::Arc, sync::Mutex};
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 
 use crate::{
     bencode::{self, BencodeParseErr, BencodeType},
@@ -38,10 +38,10 @@ impl Torrent {
 
     pub async fn start(self: &Self) {
         self.connect_to_peers().await;
-        self.send_bitfield_to_peers().await;
+        //self.send_bitfield_to_peers().await;
     }
 
-    pub async fn send_bitfield_to_peers(&self) {
+    pub fn get_bitfield(&self) -> Bytes {
         // TODO: find a better way to handle this; ceil function?
         let mut num_pieces = self.meta_info.info.length.unwrap() / self.meta_info.info.piece_length;
 
@@ -51,9 +51,13 @@ impl Torrent {
 
         let mut buf_bitfield = BytesMut::new();
         buf_bitfield.resize(num_pieces as usize, 0);
-        let buf_bitfield = buf_bitfield.freeze();
+        buf_bitfield.freeze()
+    }
 
+    pub async fn send_bitfield_to_peers(&self) {
+        let buf_bitfield = self.get_bitfield();
         let peers_vec_clone = self.connected_peers.clone();
+
         for peer in peers_vec_clone.lock().unwrap().iter_mut() {
             let result = peer.send_bitfield(&buf_bitfield).await;
             dbg!("{:#?}", result);
@@ -87,14 +91,20 @@ impl Torrent {
                 for mut peer in peers_vec {
                     let hash_clone = self.meta_info.hash.clone();
                     let peers_vec_clone = self.connected_peers.clone();
+                    let bitfield = self.get_bitfield();
                     handles.push(tokio::spawn(async move {
                         match peer.connect(&Handshake::new(hash_clone, [0; 20])).await {
                             Ok(_) => {
                                 let mut peers = peers_vec_clone.lock().unwrap();
-                                peers.push(peer);
+                                //peers.push(peer);
                                 println!("Connected to peer");
                             }
                             Err(e) => println!("Failed to connect to peer: {:#?}", e),
+                        }
+
+                        match peer.send_bitfield(&bitfield).await {
+                            Ok(result) => println!("{:#?}", result),
+                            Err(e) => println!("Failed to send bitfield: {:#?}", e),
                         }
                     }));
                 }

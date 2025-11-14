@@ -67,8 +67,12 @@ impl FromBencodemap for Peer {
 
 #[derive(Debug, Error)]
 pub enum ConnectionErr {
-    #[error("Tokio error: {0}")]
-    TokioError(std::io::Error),
+    #[error("Tokio write error: {0}")]
+    TokioWriteError(std::io::Error),
+    #[error("Tokio read error: {0}")]
+    TokioReadError(std::io::Error),
+    #[error("Tokio connect error: {0}")]
+    TokioConnectError(std::io::Error),
     #[error("Invalid connection")]
     InvalidConnection,
     #[error("Invalid handshake")]
@@ -113,20 +117,18 @@ impl Peer {
     pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Message, ConnectionErr> {
         let msg = Message {
             length: (bitfield.len() + 1) as u32,
-            id: 5,
+            id: Some(5),
             payload: Some(bitfield.clone()),
         };
 
-        self.send_message(&msg)
-            .await
-            .map_err(|_| ConnectionErr::InvalidConnection)
+        self.send_message(&msg).await
     }
 
     /// Establishes a connection and performs handshake with peer
     pub async fn connect(self: &mut Self, handshake: &Handshake) -> Result<(), ConnectionErr> {
         let mut stream = TcpStream::connect(format!("{}:{}", self.ip, self.port))
             .await
-            .map_err(|e| ConnectionErr::TokioError(e))?;
+            .map_err(|e| ConnectionErr::TokioConnectError(e))?;
 
         loop {
             let ready = stream.ready(Interest::WRITABLE).await.unwrap();
@@ -140,7 +142,7 @@ impl Peer {
                         continue;
                     }
                     Err(e) => {
-                        return Err(ConnectionErr::TokioError(e));
+                        return Err(ConnectionErr::TokioWriteError(e));
                     }
                 }
             }
@@ -163,7 +165,7 @@ impl Peer {
                         continue;
                     }
                     Err(e) => {
-                        return Err(ConnectionErr::TokioError(e));
+                        return Err(ConnectionErr::TokioReadError(e));
                     }
                 };
             }
@@ -189,7 +191,7 @@ impl Peer {
                         continue;
                     }
                     Err(e) => {
-                        return Err(ConnectionErr::TokioError(e));
+                        return Err(ConnectionErr::TokioWriteError(e));
                     }
                 }
             }
@@ -206,7 +208,7 @@ impl Peer {
                         continue;
                     }
                     Err(e) => {
-                        return Err(ConnectionErr::TokioError(e));
+                        return Err(ConnectionErr::TokioReadError(e));
                     }
                 };
             }
