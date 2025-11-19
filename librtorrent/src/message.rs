@@ -33,6 +33,7 @@ pub enum MessageErr {
     InvalidMessageId,
 }
 
+//TODO: improve memory usage
 impl Message {
     pub fn to_bytes(&self) -> Bytes {
         let mut buf = BytesMut::with_capacity(LENGTH_SIZE + self.length as usize);

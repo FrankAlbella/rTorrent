@@ -1,4 +1,6 @@
+use bytes::BufMut;
 use bytes::Bytes;
+use bytes::BytesMut;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::io::ErrorKind;
@@ -104,12 +106,29 @@ impl Peer {
 
     pub async fn download_piece(
         &mut self,
-        piece_index: usize,
+        piece_index: u8,
         piece_length: u64,
     ) -> Result<(), ConnectionErr> {
         if self.socket.is_none() {
             return Err(ConnectionErr::InvalidConnection);
         }
+
+        //let payload = Bytes::from(&piece_index.to_be_bytes());
+
+        let mut buf = BytesMut::with_capacity(12);
+        buf.put_u32(piece_index as u32);
+        buf.put_u64(piece_length);
+
+        let message = Message {
+            length: 13,
+            id: Some(6),
+            payload: Some(buf.freeze()),
+        };
+
+        println!("Sending message: {message:#?}");
+
+        let piece = self.send_message(&message).await?;
+        print!("Piece recieved {piece:#?}");
 
         Ok(())
     }
