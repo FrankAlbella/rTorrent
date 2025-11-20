@@ -1,6 +1,10 @@
+use std::usize::MAX;
+
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use sha1::Digest;
+use sha1::Sha1;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::io::ErrorKind;
@@ -108,8 +112,9 @@ impl Peer {
 
     pub async fn download_piece(
         &mut self,
-        piece_index: u8,
+        piece_index: u64,
         piece_length: u64,
+        piece_hash: [u8; 20],
     ) -> Result<(), ConnectionErr> {
         if self.socket.is_none() {
             return Err(ConnectionErr::InvalidConnection);
@@ -129,30 +134,54 @@ impl Peer {
         println!("Recieved unchoke message");
 
         // Send request for piece
-        const BLOCK_SIZE: usize = (2 as usize).pow(14);
-        let num_blocks = (piece_length as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        let block_size = BLOCK_SIZE.min(piece_length as usize);
+        const MAX_BLOCK_SIZE: usize = (2 as usize).pow(14);
+        let num_blocks = (piece_length as usize + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
         let mut piece_buffer = BytesMut::with_capacity(piece_length as usize);
+        let mut remaining = piece_length as usize;
 
-        let mut buf = BytesMut::with_capacity(12);
-        buf.put_u32(piece_index as u32); // index
-        buf.put_u32(0); // begin
-        buf.put_u32(block_size as u32); // length
+        println!("Downloading piece {piece_index} with {num_blocks} blocks");
+        for block_index in 0..num_blocks {
+            let offset = block_index * MAX_BLOCK_SIZE;
+            let block_size = MAX_BLOCK_SIZE.min(remaining);
+            remaining = remaining - block_size;
 
-        let message = Message {
-            length: 13,
-            id: Some(MessageType::Request as u8),
-            payload: Some(buf.freeze()),
-        };
+            let mut buf = BytesMut::with_capacity(12);
+            buf.put_u32(piece_index as u32); // index
+            buf.put_u32(offset as u32); // begin
+            buf.put_u32(block_size as u32); // length
 
-        println!("Sending request message: {message:#?}");
+            let message = Message {
+                length: 13,
+                id: Some(MessageType::Request as u8),
+                payload: Some(buf.freeze()),
+            };
 
-        let res = self.send_message(&message).await?;
-        print!("Message received {res:#?}");
-        if res.id != Some(MessageType::Piece as u8) {
-            self.wait_for_message(MessageType::Piece as u8).await?;
+            println!("Sending request message");
+
+            let res = self.send_message(&message).await?;
+            //println!("Message received {res:#?}");
+            if res.id != Some(MessageType::Piece as u8) {
+                let res = self.wait_for_message(MessageType::Piece as u8).await?;
+            }
+
+            if let Some(payload) = res.payload {
+                // Skip the first 8 bytes (piece index and offset)
+                piece_buffer.extend_from_slice(&payload[8..]);
+            }
+
+            println!("Block {block_index} recieved");
         }
-        print!("Piece recieved {res:#?}");
+
+        let downloaded_hash: [u8; 20] = Sha1::digest(&piece_buffer).into();
+
+        if downloaded_hash != piece_hash {
+            return Err(ConnectionErr::UnexpectedMessage(format!(
+                "Incorrect hash for piece {}",
+                piece_index
+            )));
+        }
+
+        println!("Piece recieved {piece_buffer:#?}");
 
         Ok(())
     }

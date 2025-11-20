@@ -92,7 +92,8 @@ impl Torrent {
                     let peers_vec_clone = self.connected_peers.clone();
                     let bitfield = self.get_bitfield();
                     let piece_length = self.meta_info.info.piece_length;
-                    let piece_hash = self.meta_info.info.pieces[0].clone();
+                    let piece_hash: [u8; 20] =
+                        self.meta_info.info.pieces[0..20].try_into().unwrap();
                     handles.push(tokio::spawn(async move {
                         match peer.connect(&Handshake::new(hash_clone, [0; 20])).await {
                             Ok(_) => {
@@ -114,7 +115,10 @@ impl Torrent {
                             }
                         }
 
-                        match peer.download_piece(0, piece_length as u64).await {
+                        match peer
+                            .download_piece(0, piece_length as u64, piece_hash)
+                            .await
+                        {
                             Ok(result) => println!("Downloaded piece: {:#?}", result),
                             Err(e) => println!("Failed to download piece: {:#?}", e),
                         }
