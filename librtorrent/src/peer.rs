@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use crate::bencode::BencodeMap;
 use crate::bencode::BencodeMapDecoder;
 use crate::handshake::Handshake;
-use crate::message::{Message, MessageErr};
+use crate::message::{Message, MessageErr, MessageType};
 use crate::meta_info::FromBencodeTypeErr;
 use crate::meta_info::FromBencodemap;
 
@@ -81,6 +81,8 @@ pub enum ConnectionErr {
     InvalidHandshake,
     #[error("Invalid message")]
     InvalidMessage(#[from] MessageErr),
+    #[error("Unexpected message: {0}")]
+    UnexpectedMessage(String),
 }
 
 impl Peer {
@@ -114,23 +116,71 @@ impl Peer {
         }
 
         //let payload = Bytes::from(&piece_index.to_be_bytes());
+        let message = Message::new(1, Some(MessageType::Interested as u8), None);
+
+        let res = self.send_message(&message).await?;
+
+        println!("Sent interested message");
+
+        if res.id != Some(MessageType::Unchoke as u8) {
+            self.wait_for_message(MessageType::Unchoke as u8).await?;
+        }
+
+        println!("Recieved unchoke message");
+
+        // Send request for piece
+        const BLOCK_SIZE: usize = (2 as usize).pow(14);
+        let num_blocks = (piece_length as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let block_size = BLOCK_SIZE.min(piece_length as usize);
+        let mut piece_buffer = BytesMut::with_capacity(piece_length as usize);
 
         let mut buf = BytesMut::with_capacity(12);
-        buf.put_u32(piece_index as u32);
-        buf.put_u64(piece_length);
+        buf.put_u32(piece_index as u32); // index
+        buf.put_u32(0); // begin
+        buf.put_u32(block_size as u32); // length
 
         let message = Message {
             length: 13,
-            id: Some(6),
+            id: Some(MessageType::Request as u8),
             payload: Some(buf.freeze()),
         };
 
-        println!("Sending message: {message:#?}");
+        println!("Sending request message: {message:#?}");
 
-        let piece = self.send_message(&message).await?;
-        print!("Piece recieved {piece:#?}");
+        let res = self.send_message(&message).await?;
+        print!("Message received {res:#?}");
+        if res.id != Some(MessageType::Piece as u8) {
+            self.wait_for_message(MessageType::Piece as u8).await?;
+        }
+        print!("Piece recieved {res:#?}");
 
         Ok(())
+    }
+
+    // Read from socket until we get a message with the specified id
+    pub async fn wait_for_message(&mut self, id: u8) -> Result<Message, ConnectionErr> {
+        let stream = self.socket.as_mut().unwrap();
+        loop {
+            let ready = stream.ready(Interest::READABLE).await.unwrap();
+
+            if ready.is_readable() {
+                let mut buf: [u8; 100000] = [0; 100000];
+                match stream.try_read(&mut buf) {
+                    Ok(_) => {
+                        let msg = Message::from_bytes(&buf)?;
+                        if msg.id == Some(id) {
+                            return Ok(msg);
+                        }
+                    }
+                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(ConnectionErr::TokioReadError(e));
+                    }
+                };
+            }
+        }
     }
 
     pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Message, ConnectionErr> {

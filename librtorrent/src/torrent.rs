@@ -42,15 +42,14 @@ impl Torrent {
     }
 
     pub fn get_bitfield(&self) -> Bytes {
-        // TODO: find a better way to handle this; ceil function?
-        let mut num_pieces = self.meta_info.info.length.unwrap() / self.meta_info.info.piece_length;
+        let total_length = self.meta_info.info.length.unwrap();
+        let piece_length = self.meta_info.info.piece_length;
+        let num_pieces = (total_length + piece_length - 1) / piece_length;
 
-        if num_pieces % self.meta_info.info.piece_length != 0 {
-            num_pieces += 1;
-        }
+        let num_bytes = (num_pieces + 7) / 8;
 
         let mut buf_bitfield = BytesMut::new();
-        buf_bitfield.resize(num_pieces as usize, 0);
+        buf_bitfield.resize(num_bytes as usize, 0);
         buf_bitfield.freeze()
     }
 
@@ -92,6 +91,8 @@ impl Torrent {
                     let hash_clone = self.meta_info.hash.clone();
                     let peers_vec_clone = self.connected_peers.clone();
                     let bitfield = self.get_bitfield();
+                    let piece_length = self.meta_info.info.piece_length;
+                    let piece_hash = self.meta_info.info.pieces[0].clone();
                     handles.push(tokio::spawn(async move {
                         match peer.connect(&Handshake::new(hash_clone, [0; 20])).await {
                             Ok(_) => {
@@ -99,12 +100,23 @@ impl Torrent {
                                 //peers.push(peer);
                                 println!("Connected to peer");
                             }
-                            Err(e) => println!("Failed to connect to peer: {:#?}", e),
+                            Err(e) => {
+                                println!("Failed to connect to peer: {:#?}", e);
+                                return;
+                            }
                         }
 
                         match peer.send_bitfield(&bitfield).await {
-                            Ok(result) => println!("{:#?}", result),
-                            Err(e) => println!("Failed to send bitfield: {:#?}", e),
+                            Ok(result) => println!("Bitfield received!"),
+                            Err(e) => {
+                                println!("Failed to send bitfield: {:#?}", e);
+                                return;
+                            }
+                        }
+
+                        match peer.download_piece(0, piece_length as u64).await {
+                            Ok(result) => println!("Downloaded piece: {:#?}", result),
+                            Err(e) => println!("Failed to download piece: {:#?}", e),
                         }
                     }));
                 }

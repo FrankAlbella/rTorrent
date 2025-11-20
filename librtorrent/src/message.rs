@@ -12,7 +12,7 @@ pub struct Message {
     pub payload: Option<Bytes>,
 }
 
-enum MessageType {
+pub enum MessageType {
     Choke = 0,
     Unchoke = 1,
     Interested = 2,
@@ -35,6 +35,15 @@ pub enum MessageErr {
 
 //TODO: improve memory usage
 impl Message {
+    // TODO: automatically calculate length
+    pub fn new(length: u32, id: Option<u8>, payload: Option<Bytes>) -> Self {
+        Message {
+            length,
+            id,
+            payload,
+        }
+    }
+
     pub fn to_bytes(&self) -> Bytes {
         let mut buf = BytesMut::with_capacity(LENGTH_SIZE + self.length as usize);
 
