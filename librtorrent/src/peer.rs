@@ -169,7 +169,7 @@ impl Peer {
                 piece_buffer.extend_from_slice(&payload[8..]);
             }
 
-            println!("Block {block_index} recieved");
+            println!("Block {block_index} of {num_blocks} for piece {piece_index} recieved");
         }
 
         let downloaded_hash: [u8; 20] = Sha1::digest(&piece_buffer).into();

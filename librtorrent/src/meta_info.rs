@@ -24,6 +24,8 @@ const INFO_XOR_VALUES: [&str; 2] = [LENGTH_KEY, FILES_KEY];
 // Heys for the files dict
 const PATH_KEY: &str = "path";
 
+const HASH_SIZE: usize = 20;
+
 const ERROR_MISSING_VALUE: &str = "Map is missing required values";
 
 #[derive(Debug, Error)]
@@ -76,6 +78,13 @@ impl TorrentInfo {
             true => TorrentType::SingleFile,
             false => TorrentType::MultiFile,
         }
+    }
+
+    pub fn get_piece_hash(&self, piece_index: usize) -> Option<[u8; HASH_SIZE]> {
+        let start = piece_index * HASH_SIZE;
+        let end = start + HASH_SIZE;
+
+        self.pieces.get(start..end)?.try_into().ok()
     }
 }
 
