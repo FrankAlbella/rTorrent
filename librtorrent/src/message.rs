@@ -5,7 +5,7 @@ const LENGTH_SIZE: usize = 4;
 const ID_SIZE: usize = 1;
 const HEADER_SIZE: usize = LENGTH_SIZE + ID_SIZE;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message {
     pub length: u32,
     pub id: Option<u8>,

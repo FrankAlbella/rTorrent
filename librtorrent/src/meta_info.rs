@@ -238,3 +238,16 @@ impl FromBencodemap for MetaInfo {
         true
     }
 }
+
+impl TorrentInfo {
+    pub fn get_piece_hashes(&self) -> Vec<[u8; 20]> {
+        self.pieces
+            .chunks(HASH_SIZE)
+            .map(|chunk| {
+                let mut hash = [0u8; HASH_SIZE];
+                hash.copy_from_slice(chunk);
+                hash
+            })
+            .collect()
+    }
+}

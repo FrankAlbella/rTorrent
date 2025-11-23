@@ -3,6 +3,8 @@ pub mod handshake;
 pub mod message;
 pub mod meta_info;
 pub mod peer;
+pub mod peer_manager;
+pub mod piece_manager;
 pub mod session;
 pub mod torrent;
 pub mod tracker;

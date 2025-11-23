@@ -14,7 +14,7 @@ const RESERVED_OFFSET: usize = PROTOCOL_OFFSET + PROTOCOL_SIZE;
 const INFOHASH_OFFSET: usize = RESERVED_OFFSET + RESERVED_SIZE;
 const PEER_ID_OFFSET: usize = INFOHASH_OFFSET + INFOHASH_SIZE;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Handshake {
     pub length: u8,
     pub protocol: [u8; PROTOCOL_SIZE],

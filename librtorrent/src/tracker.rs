@@ -6,6 +6,7 @@ use crate::{
 use reqwest::{Client, Url};
 use serde::Serialize;
 use std::str::FromStr;
+use thiserror::Error;
 use url::form_urlencoded::byte_serialize;
 use url::ParseError;
 
@@ -44,13 +45,19 @@ enum TrackerEvent {
 }
 
 // TODO implement with thiserror::Error
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TrackerErr {
+    #[error("Invalid meta info")]
     InvalidMetaInfo,
-    UrlParseError(ParseError),
-    BencodeParseErr(BencodeParseErr),
-    FromBencodeTypeErr(FromBencodeTypeErr),
+    #[error("URL parse error")]
+    UrlParseError(#[from] ParseError),
+    #[error("Bencode parse error {0}")]
+    BencodeParseErr(#[from] BencodeParseErr),
+    #[error("FromBencodeTypeErr {0}")]
+    FromBencodeTypeErr(#[from] FromBencodeTypeErr),
+    #[error("Reqwest error {0}")]
     ReqwestError(reqwest::Error),
+    #[error("Serde error {0}")]
     SerdeErr(serde_qs::Error),
 }
 

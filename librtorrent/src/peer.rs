@@ -1,22 +1,17 @@
-use std::usize::MAX;
-
-use bytes::BufMut;
-use bytes::Bytes;
-use bytes::BytesMut;
-use sha1::Digest;
-use sha1::Sha1;
+use bytes::{BufMut, Bytes, BytesMut};
+use sha1::{Digest, Sha1};
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
-use tokio::io::ErrorKind;
-use tokio::io::Interest;
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncWriteExt, ErrorKind, Interest},
+    net::TcpStream,
+};
 
-use crate::bencode::BencodeMap;
-use crate::bencode::BencodeMapDecoder;
-use crate::handshake::Handshake;
-use crate::message::{Message, MessageErr, MessageType};
-use crate::meta_info::FromBencodeTypeErr;
-use crate::meta_info::FromBencodemap;
+use crate::{
+    bencode::{BencodeMap, BencodeMapDecoder},
+    handshake::Handshake,
+    message::{Message, MessageErr, MessageType},
+    meta_info::{FromBencodeTypeErr, FromBencodemap},
+};
 
 // Peer keys
 const PEER_ID_KEY: &str = "peer id";
@@ -31,6 +26,16 @@ pub struct Peer {
     pub socket: Option<Box<TcpStream>>,
     pub my_state: PeerState,
     pub their_state: PeerState,
+}
+
+#[derive(Debug, Clone)]
+pub enum PeerEvent {
+    Connected,
+    Disconnected,
+    HandshakeReceived(Handshake),
+    HandshakeSent(Handshake),
+    MessageReceived(Message),
+    MessageSent(Message),
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +115,10 @@ impl Peer {
             .collect()
     }
 
+    pub async fn start(&mut self) -> Result<(), ConnectionErr> {
+        Ok(())
+    }
+
     pub async fn download_piece(
         &mut self,
         piece_index: u64,
@@ -158,10 +167,10 @@ impl Peer {
 
             println!("Sending request message");
 
-            let res = self.send_message(&message).await?;
+            let mut res = self.send_message(&message).await?;
             //println!("Message received {res:#?}");
             if res.id != Some(MessageType::Piece as u8) {
-                let res = self.wait_for_message(MessageType::Piece as u8).await?;
+                res = self.wait_for_message(MessageType::Piece as u8).await?;
             }
 
             if let Some(payload) = res.payload {
