@@ -82,7 +82,7 @@ pub enum ConnectionErr {
     InvalidConnection,
     #[error("Invalid handshake")]
     InvalidHandshake,
-    #[error("Invalid message")]
+    #[error("Invalid message {0}")]
     InvalidMessage(#[from] MessageErr),
     #[error("Unexpected message: {0}")]
     UnexpectedMessage(String),
@@ -311,6 +311,8 @@ impl Peer {
                     Ok(_) => match Handshake::from_bytes(&buf.to_vec()) {
                         Ok(their_hs) if their_hs.is_valid(&handshake) => {
                             self.socket = Some(Box::new(stream));
+                            self.my_state = PeerState::Chocked;
+                            self.their_state = PeerState::Chocked;
                             return Ok(());
                         }
                         _ => return Err(ConnectionErr::InvalidHandshake),
