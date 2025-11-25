@@ -213,7 +213,6 @@ impl PieceManager {
             .await?;
 
         let piece_count = self.piece_hashes.len();
-        println!("Piece count {piece_count}");
         for index in 0..piece_count {
             let buf = {
                 let map = self.piece_map.lock().unwrap();
@@ -227,10 +226,7 @@ impl PieceManager {
                 let file_offset = index as u64 * self.piece_length as u64;
                 file.seek(SeekFrom::Start(file_offset)).await?;
 
-                //println!("Saving piece {index} with data {data:#?}");
-
                 file.write_all(&data).await?;
-                println!("Piece {index} saved to disk!");
 
                 let mut map = self.piece_map.lock().unwrap();
                 map.insert(index, PieceStatus::OnDisk);

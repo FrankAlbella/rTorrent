@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -10,7 +10,7 @@ use tokio::{
 use crate::{
     bencode::{BencodeMap, BencodeMapDecoder},
     handshake::Handshake,
-    message::{Message, MessageErr, MessageType},
+    message::{Message, MessageErr},
     meta_info::{FromBencodeTypeErr, FromBencodemap},
     piece_manager::PieceManager,
 };
@@ -151,13 +151,13 @@ impl Peer {
     }
 
     pub async fn send_interested(&mut self) -> Result<(), ConnectionErr> {
-        let message = Message::new(1, Some(MessageType::Interested as u8), None);
+        let message = Message::Interested;
 
         self.log("Sending interested message");
 
         let res = self.send_message(&message).await?;
 
-        if res.id != Some(MessageType::Unchoke as u8) {
+        if !matches!(res, Message::Unchoke) {
             return Err(ConnectionErr::UnexpectedMessage(
                 "Expected unchoke message".to_string(),
             ));
@@ -187,30 +187,29 @@ impl Peer {
             let block_size = MAX_BLOCK_SIZE.min(remaining);
             remaining = remaining - block_size;
 
-            let mut buf = BytesMut::with_capacity(12);
-            buf.put_u32(piece_index as u32); // index
-            buf.put_u32(offset as u32); // begin
-            buf.put_u32(block_size as u32); // length
-
-            let message = Message {
-                length: 13,
-                id: Some(MessageType::Request as u8),
-                payload: Some(buf.freeze()),
+            let message = Message::Request {
+                index: piece_index as u32,
+                begin: offset as u32,
+                length: block_size as u32,
             };
 
             self.log("Sending request message");
 
             let res = self.send_message(&message).await?;
 
-            if res.id != Some(MessageType::Piece as u8) {
-                return Err(ConnectionErr::UnexpectedMessage(
-                    "Expected piece message".to_string(),
-                ));
-            }
-
-            if let Some(payload) = res.payload {
-                // Skip the first 8 bytes (piece index and offset)
-                piece_buffer.extend_from_slice(&payload[8..]);
+            match res {
+                Message::Piece {
+                    index,
+                    begin,
+                    block,
+                } => {
+                    piece_buffer.extend_from_slice(&block);
+                }
+                _ => {
+                    return Err(ConnectionErr::UnexpectedMessage(
+                        "Expected piece message".to_string(),
+                    ));
+                }
             }
 
             self.log(&format!(
@@ -224,24 +223,14 @@ impl Peer {
     }
 
     pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Bytes, ConnectionErr> {
-        let msg = Message {
-            length: (bitfield.len() + 1) as u32,
-            id: Some(MessageType::Bitfield as u8),
-            payload: Some(bitfield.clone()),
+        let msg = Message::Bitfield {
+            bitfield: bitfield.clone(),
         };
 
         let result = self.send_message(&msg).await;
 
         match result {
-            Ok(msg) if msg.id == Some(MessageType::Bitfield as u8) => {
-                if let Some(payload) = msg.payload {
-                    Ok(payload)
-                } else {
-                    Err(ConnectionErr::UnexpectedMessage(
-                        "Expected Bitfield message payload to be Some".to_string(),
-                    ))
-                }
-            }
+            Ok(Message::Bitfield { bitfield: payload }) => Ok(payload),
             Err(e) => Err(e),
             _ => Err(ConnectionErr::UnexpectedMessage(
                 "Expected Bitfield message".to_string(),
