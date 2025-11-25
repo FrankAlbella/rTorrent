@@ -1,22 +1,19 @@
-use std::usize::MAX;
+use std::sync::Arc;
 
-use bytes::BufMut;
-use bytes::Bytes;
-use bytes::BytesMut;
-use sha1::Digest;
-use sha1::Sha1;
+use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
-use tokio::io::ErrorKind;
-use tokio::io::Interest;
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
-use crate::bencode::BencodeMap;
-use crate::bencode::BencodeMapDecoder;
-use crate::handshake::Handshake;
-use crate::message::{Message, MessageErr, MessageType};
-use crate::meta_info::FromBencodeTypeErr;
-use crate::meta_info::FromBencodemap;
+use crate::{
+    bencode::{BencodeMap, BencodeMapDecoder},
+    handshake::Handshake,
+    message::{Message, MessageErr, MessageType},
+    meta_info::{FromBencodeTypeErr, FromBencodemap},
+    piece_manager::PieceManager,
+};
 
 // Peer keys
 const PEER_ID_KEY: &str = "peer id";
@@ -28,26 +25,28 @@ pub struct Peer {
     pub peer_id: Option<String>,
     pub ip: String,
     pub port: i64,
-    pub socket: Option<Box<TcpStream>>,
+    pub socket: Option<TcpStream>,
     pub my_state: PeerState,
     pub their_state: PeerState,
 }
 
 #[derive(Debug, Clone)]
-pub struct PeerState {
-    choked: bool,
-    interested: bool,
-    bitfield: Vec<bool>,
+pub enum PeerEvent {
+    Connected,
+    Disconnected,
+    HandshakeReceived(Handshake),
+    HandshakeSent(Handshake),
+    MessageReceived(Message),
+    MessageSent(Message),
 }
 
-impl PeerState {
-    pub fn new() -> Self {
-        PeerState {
-            choked: true,
-            interested: false,
-            bitfield: Vec::new(),
-        }
-    }
+#[derive(Debug, Clone)]
+pub enum PeerState {
+    Disconnected,
+    Choked,
+    Interested,
+    Downloading,
+    Idle,
 }
 
 impl FromBencodemap for Peer {
@@ -83,10 +82,12 @@ pub enum ConnectionErr {
     InvalidConnection,
     #[error("Invalid handshake")]
     InvalidHandshake,
-    #[error("Invalid message")]
+    #[error("Invalid message {0}")]
     InvalidMessage(#[from] MessageErr),
     #[error("Unexpected message: {0}")]
     UnexpectedMessage(String),
+    #[error("Unexpected IO error {0}")]
+    UnexpectedIoError(#[from] std::io::Error),
 }
 
 impl Peer {
@@ -96,8 +97,8 @@ impl Peer {
             ip,
             port,
             socket: None,
-            my_state: PeerState::new(),
-            their_state: PeerState::new(),
+            my_state: PeerState::Disconnected,
+            their_state: PeerState::Disconnected,
         }
     }
 
@@ -110,36 +111,77 @@ impl Peer {
             .collect()
     }
 
-    pub async fn download_piece(
+    pub async fn start(
         &mut self,
-        piece_index: u64,
-        piece_length: u64,
-        piece_hash: [u8; 20],
+        piece_manager: &PieceManager,
+        torrent_hash: Arc<[u8; 20]>,
     ) -> Result<(), ConnectionErr> {
-        if self.socket.is_none() {
-            return Err(ConnectionErr::InvalidConnection);
+        self.connect(&Handshake::new(*torrent_hash, [0u8; 20]))
+            .await?;
+        self.log("Connected to peer");
+
+        let bitfield = piece_manager.get_bitfield();
+
+        self.log("Sending bitfield!");
+        let their_bitfield = self.send_bitfield(&bitfield).await?;
+        self.log("Bitfield received!");
+
+        let piece_length = piece_manager.get_piece_length();
+
+        while let Some(index) = piece_manager.get_next_piece(&their_bitfield) {
+            self.log(&format!("Attempting to download piece {index}"));
+            if matches!(self.my_state, PeerState::Choked) {
+                self.log("Peer is chocking us, sending interested");
+                self.send_interested().await?;
+
+                self.my_state = PeerState::Interested;
+            }
+
+            let result = self.download_piece(index, piece_length as u64).await?;
+            if piece_manager.add_piece(&index, result).await {
+                self.log(&format!(
+                    "Piece {index} successfully downloaded and verified!"
+                ));
+            } else {
+                self.log(&format!("Piece {index} download failed!"));
+            }
         }
 
-        //let payload = Bytes::from(&piece_index.to_be_bytes());
+        Ok(())
+    }
+
+    pub async fn send_interested(&mut self) -> Result<(), ConnectionErr> {
         let message = Message::new(1, Some(MessageType::Interested as u8), None);
+
+        self.log("Sending interested message");
 
         let res = self.send_message(&message).await?;
 
-        println!("Sent interested message");
-
         if res.id != Some(MessageType::Unchoke as u8) {
-            self.wait_for_message(MessageType::Unchoke as u8).await?;
+            return Err(ConnectionErr::UnexpectedMessage(
+                "Expected unchoke message".to_string(),
+            ));
         }
 
-        println!("Recieved unchoke message");
+        self.log("Recieved unchoke message");
 
+        Ok(())
+    }
+
+    pub async fn download_piece(
+        &mut self,
+        piece_index: usize,
+        piece_length: u64,
+    ) -> Result<Bytes, ConnectionErr> {
         // Send request for piece
         const MAX_BLOCK_SIZE: usize = (2 as usize).pow(14);
         let num_blocks = (piece_length as usize + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
         let mut piece_buffer = BytesMut::with_capacity(piece_length as usize);
         let mut remaining = piece_length as usize;
 
-        println!("Downloading piece {piece_index} with {num_blocks} blocks");
+        self.log(&format!(
+            "Downloading piece {piece_index} with {num_blocks} blocks"
+        ));
         for block_index in 0..num_blocks {
             let offset = block_index * MAX_BLOCK_SIZE;
             let block_size = MAX_BLOCK_SIZE.min(remaining);
@@ -156,12 +198,14 @@ impl Peer {
                 payload: Some(buf.freeze()),
             };
 
-            println!("Sending request message");
+            self.log("Sending request message");
 
             let res = self.send_message(&message).await?;
-            //println!("Message received {res:#?}");
+
             if res.id != Some(MessageType::Piece as u8) {
-                let res = self.wait_for_message(MessageType::Piece as u8).await?;
+                return Err(ConnectionErr::UnexpectedMessage(
+                    "Expected piece message".to_string(),
+                ));
             }
 
             if let Some(payload) = res.payload {
@@ -169,57 +213,40 @@ impl Peer {
                 piece_buffer.extend_from_slice(&payload[8..]);
             }
 
-            println!("Block {block_index} of {num_blocks} for piece {piece_index} recieved");
+            self.log(&format!(
+                "Block {block_index} of {num_blocks} for piece {piece_index} recieved"
+            ));
         }
 
-        let downloaded_hash: [u8; 20] = Sha1::digest(&piece_buffer).into();
+        self.log(&format!("Piece {piece_index} recieved"));
 
-        if downloaded_hash != piece_hash {
-            return Err(ConnectionErr::UnexpectedMessage(format!(
-                "Incorrect hash for piece {}",
-                piece_index
-            )));
-        }
-
-        println!("Piece recieved {piece_buffer:#?}");
-
-        Ok(())
+        Ok(piece_buffer.freeze())
     }
 
-    // Read from socket until we get a message with the specified id
-    pub async fn wait_for_message(&mut self, id: u8) -> Result<Message, ConnectionErr> {
-        let stream = self.socket.as_mut().unwrap();
-        loop {
-            let ready = stream.ready(Interest::READABLE).await.unwrap();
-
-            if ready.is_readable() {
-                let mut buf: [u8; 100000] = [0; 100000];
-                match stream.try_read(&mut buf) {
-                    Ok(_) => {
-                        let msg = Message::from_bytes(&buf)?;
-                        if msg.id == Some(id) {
-                            return Ok(msg);
-                        }
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioReadError(e));
-                    }
-                };
-            }
-        }
-    }
-
-    pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Message, ConnectionErr> {
+    pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Bytes, ConnectionErr> {
         let msg = Message {
             length: (bitfield.len() + 1) as u32,
-            id: Some(5),
+            id: Some(MessageType::Bitfield as u8),
             payload: Some(bitfield.clone()),
         };
 
-        self.send_message(&msg).await
+        let result = self.send_message(&msg).await;
+
+        match result {
+            Ok(msg) if msg.id == Some(MessageType::Bitfield as u8) => {
+                if let Some(payload) = msg.payload {
+                    Ok(payload)
+                } else {
+                    Err(ConnectionErr::UnexpectedMessage(
+                        "Expected Bitfield message payload to be Some".to_string(),
+                    ))
+                }
+            }
+            Err(e) => Err(e),
+            _ => Err(ConnectionErr::UnexpectedMessage(
+                "Expected Bitfield message".to_string(),
+            )),
+        }
     }
 
     /// Establishes a connection and performs handshake with peer
@@ -228,88 +255,35 @@ impl Peer {
             .await
             .map_err(|e| ConnectionErr::TokioConnectError(e))?;
 
-        loop {
-            let ready = stream.ready(Interest::WRITABLE).await.unwrap();
+        stream.write_all(&handshake.to_bytes()).await?;
 
-            if ready.is_writable() {
-                match stream.write_all(&handshake.to_bytes()).await {
-                    Ok(_) => {
-                        break;
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioWriteError(e));
-                    }
-                }
+        let mut buf: [u8; crate::handshake::TOTAL_SIZE] = [0; crate::handshake::TOTAL_SIZE];
+        stream.read_exact(&mut buf).await?;
+
+        if let Ok(hs) = Handshake::from_bytes(&buf) {
+            if hs.is_valid(&handshake) {
+                self.socket = Some(stream);
+                self.my_state = PeerState::Choked;
+                self.their_state = PeerState::Choked;
+                return Ok(());
             }
         }
 
-        loop {
-            let ready = stream.ready(Interest::READABLE).await.unwrap();
-
-            if ready.is_readable() {
-                let mut buf: [u8; crate::handshake::TOTAL_SIZE] = [0; crate::handshake::TOTAL_SIZE];
-                match stream.try_read(&mut buf) {
-                    Ok(_) => match Handshake::from_bytes(&buf.to_vec()) {
-                        Ok(their_hs) if their_hs.is_valid(&handshake) => {
-                            self.socket = Some(Box::new(stream));
-                            return Ok(());
-                        }
-                        _ => return Err(ConnectionErr::InvalidHandshake),
-                    },
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioReadError(e));
-                    }
-                };
-            }
-        }
+        Err(ConnectionErr::InvalidHandshake)
     }
 
     async fn send_message(&mut self, message: &Message) -> Result<Message, ConnectionErr> {
-        if self.socket.is_none() {
-            return Err(ConnectionErr::InvalidConnection);
-        }
+        let stream = match self.socket.as_mut() {
+            Some(stream) => stream,
+            None => return Err(ConnectionErr::InvalidConnection),
+        };
 
-        let stream = self.socket.as_mut().unwrap();
+        stream.write_all(&message.to_bytes()).await?;
 
-        loop {
-            let ready = stream.ready(Interest::WRITABLE).await.unwrap();
+        Ok(Message::from_stream(stream).await?)
+    }
 
-            if ready.is_writable() {
-                match stream.write_all(&message.to_bytes()).await {
-                    Ok(_) => {
-                        break;
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioWriteError(e));
-                    }
-                }
-            }
-        }
-
-        loop {
-            let ready = stream.ready(Interest::READABLE).await.unwrap();
-
-            if ready.is_readable() {
-                let mut buf: [u8; 100000] = [0; 100000];
-                match stream.try_read(&mut buf) {
-                    Ok(_) => return Ok(Message::from_bytes(&buf)?),
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioReadError(e));
-                    }
-                };
-            }
-        }
+    fn log(&self, message: &str) {
+        println!("Peer @ {}:{}:\t{}", self.ip, self.port, message);
     }
 }

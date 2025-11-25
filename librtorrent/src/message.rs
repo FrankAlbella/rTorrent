@@ -1,11 +1,12 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
+use tokio::{io::AsyncReadExt, net::TcpStream};
 
 const LENGTH_SIZE: usize = 4;
 const ID_SIZE: usize = 1;
 const HEADER_SIZE: usize = LENGTH_SIZE + ID_SIZE;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message {
     pub length: u32,
     pub id: Option<u8>,
@@ -31,6 +32,8 @@ pub enum MessageErr {
     InvalidMessageLength,
     #[error("Invalid message Id")]
     InvalidMessageId,
+    #[error("IO error {0}")]
+    IoError(#[from] std::io::Error),
 }
 
 //TODO: improve memory usage
@@ -98,6 +101,30 @@ impl Message {
             id: Some(id),
             payload,
         })
+    }
+
+    pub async fn from_stream(stream: &mut TcpStream) -> Result<Message, MessageErr> {
+        let mut len_buf = [0u8; LENGTH_SIZE];
+        stream.read_exact(&mut len_buf).await?;
+
+        let length = u32::from_be_bytes(len_buf);
+
+        if length == 0 {
+            return Ok(Message {
+                length,
+                id: None,
+                payload: None,
+            });
+        }
+
+        let mut payload_buf = vec![0u8; length as usize];
+        stream.read_exact(&mut payload_buf).await?;
+
+        let mut full_buf = BytesMut::with_capacity(LENGTH_SIZE + length as usize);
+        full_buf.extend_from_slice(&len_buf);
+        full_buf.extend_from_slice(&payload_buf);
+
+        Self::from_bytes(&full_buf.freeze())
     }
 }
 
