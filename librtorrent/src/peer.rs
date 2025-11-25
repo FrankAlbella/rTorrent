@@ -138,10 +138,10 @@ impl Peer {
             let result = self.download_piece(index, piece_length as u64).await?;
             if piece_manager.add_piece(&index, result) {
                 self.log(&format!(
-                    "Piece successfully downloaded and verified! {index}"
+                    "Piece {index} successfully downloaded and verified!"
                 ));
             } else {
-                self.log(&format!("Piece download failed! {index}"));
+                self.log(&format!("Piece {index} download failed!"));
             }
         }
 
