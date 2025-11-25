@@ -221,7 +221,7 @@ impl Peer {
             ));
         }
 
-        self.log(&format!("Piece recieved {piece_buffer:#?}"));
+        self.log(&format!("Piece {piece_index} recieved"));
 
         Ok(piece_buffer.freeze())
     }
@@ -353,25 +353,10 @@ impl Peer {
             }
         }
 
-        loop {
-            let ready = stream.ready(Interest::READABLE).await.unwrap();
-
-            if ready.is_readable() {
-                let mut buf: [u8; 100000] = [0; 100000];
-                match stream.try_read(&mut buf) {
-                    Ok(_) => return Ok(Message::from_bytes(&buf)?),
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioReadError(e));
-                    }
-                };
-            }
-        }
+        Ok(Message::from_stream(stream).await?)
     }
 
     fn log(&self, message: &str) {
-        println!("Peer @ {}:{}: {}", self.ip, self.port, message);
+        println!("Peer @ {}:{}:\t{}", self.ip, self.port, message);
     }
 }
