@@ -43,7 +43,7 @@ pub enum PeerEvent {
 #[derive(Debug, Clone)]
 pub enum PeerState {
     Disconnected,
-    Chocked,
+    Choked,
     Interested,
     Downloading,
     Idle,
@@ -130,7 +130,7 @@ impl Peer {
 
         while let Some(index) = piece_manager.get_next_piece(&their_bitfield) {
             self.log(&format!("Attempting to download piece {index}"));
-            if matches!(self.my_state, PeerState::Chocked) {
+            if matches!(self.my_state, PeerState::Choked) {
                 self.log("Peer is chocking us, sending interested");
                 self.send_interested().await?;
 
@@ -263,8 +263,8 @@ impl Peer {
         if let Ok(hs) = Handshake::from_bytes(&buf) {
             if hs.is_valid(&handshake) {
                 self.socket = Some(Box::new(stream));
-                self.my_state = PeerState::Chocked;
-                self.their_state = PeerState::Chocked;
+                self.my_state = PeerState::Choked;
+                self.their_state = PeerState::Choked;
                 return Ok(());
             }
         }
