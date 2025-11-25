@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncWriteExt, ErrorKind, Interest},
+    io::{AsyncReadExt, AsyncWriteExt, ErrorKind, Interest},
     net::TcpStream,
 };
 
@@ -86,6 +86,8 @@ pub enum ConnectionErr {
     InvalidMessage(#[from] MessageErr),
     #[error("Unexpected message: {0}")]
     UnexpectedMessage(String),
+    #[error("Unexpected IO error {0}")]
+    UnexpectedIoError(#[from] std::io::Error),
 }
 
 impl Peer {
@@ -149,10 +151,6 @@ impl Peer {
     }
 
     pub async fn send_interested(&mut self) -> Result<(), ConnectionErr> {
-        if self.socket.is_none() {
-            return Err(ConnectionErr::InvalidConnection);
-        }
-
         let message = Message::new(1, Some(MessageType::Interested as u8), None);
 
         self.log("Sending interested message");
@@ -160,7 +158,9 @@ impl Peer {
         let res = self.send_message(&message).await?;
 
         if res.id != Some(MessageType::Unchoke as u8) {
-            self.wait_for_message(MessageType::Unchoke as u8).await?;
+            return Err(ConnectionErr::UnexpectedMessage(
+                "Expected unchoke message".to_string(),
+            ));
         }
 
         self.log("Recieved unchoke message");
@@ -173,10 +173,6 @@ impl Peer {
         piece_index: usize,
         piece_length: u64,
     ) -> Result<Bytes, ConnectionErr> {
-        if self.socket.is_none() {
-            return Err(ConnectionErr::InvalidConnection);
-        }
-
         // Send request for piece
         const MAX_BLOCK_SIZE: usize = (2 as usize).pow(14);
         let num_blocks = (piece_length as usize + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
@@ -204,11 +200,12 @@ impl Peer {
 
             self.log("Sending request message");
 
-            let mut res = self.send_message(&message).await?;
-            //self.log("Message received {res:#?}");
+            let res = self.send_message(&message).await?;
+
             if res.id != Some(MessageType::Piece as u8) {
-                self.log("Waiting for piece message");
-                res = self.wait_for_message(MessageType::Piece as u8).await?;
+                return Err(ConnectionErr::UnexpectedMessage(
+                    "Expected piece message".to_string(),
+                ));
             }
 
             if let Some(payload) = res.payload {
@@ -224,32 +221,6 @@ impl Peer {
         self.log(&format!("Piece {piece_index} recieved"));
 
         Ok(piece_buffer.freeze())
-    }
-
-    // Read from socket until we get a message with the specified id
-    pub async fn wait_for_message(&mut self, id: u8) -> Result<Message, ConnectionErr> {
-        let stream = self.socket.as_mut().unwrap();
-        loop {
-            let ready = stream.ready(Interest::READABLE).await.unwrap();
-
-            if ready.is_readable() {
-                let mut buf: [u8; 100000] = [0; 100000];
-                match stream.try_read(&mut buf) {
-                    Ok(_) => {
-                        let msg = Message::from_bytes(&buf)?;
-                        if msg.id == Some(id) {
-                            return Ok(msg);
-                        }
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioReadError(e));
-                    }
-                };
-            }
-        }
     }
 
     pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Bytes, ConnectionErr> {
@@ -284,74 +255,30 @@ impl Peer {
             .await
             .map_err(|e| ConnectionErr::TokioConnectError(e))?;
 
-        loop {
-            let ready = stream.ready(Interest::WRITABLE).await.unwrap();
+        stream.write_all(&handshake.to_bytes()).await?;
 
-            if ready.is_writable() {
-                match stream.write_all(&handshake.to_bytes()).await {
-                    Ok(_) => {
-                        break;
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioWriteError(e));
-                    }
-                }
+        let mut buf: [u8; crate::handshake::TOTAL_SIZE] = [0; crate::handshake::TOTAL_SIZE];
+        stream.read_exact(&mut buf).await?;
+
+        if let Ok(hs) = Handshake::from_bytes(&buf) {
+            if hs.is_valid(&handshake) {
+                self.socket = Some(Box::new(stream));
+                self.my_state = PeerState::Chocked;
+                self.their_state = PeerState::Chocked;
+                return Ok(());
             }
         }
 
-        loop {
-            let ready = stream.ready(Interest::READABLE).await.unwrap();
-
-            if ready.is_readable() {
-                let mut buf: [u8; crate::handshake::TOTAL_SIZE] = [0; crate::handshake::TOTAL_SIZE];
-                match stream.try_read(&mut buf) {
-                    Ok(_) => match Handshake::from_bytes(&buf.to_vec()) {
-                        Ok(their_hs) if their_hs.is_valid(&handshake) => {
-                            self.socket = Some(Box::new(stream));
-                            self.my_state = PeerState::Chocked;
-                            self.their_state = PeerState::Chocked;
-                            return Ok(());
-                        }
-                        _ => return Err(ConnectionErr::InvalidHandshake),
-                    },
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioReadError(e));
-                    }
-                };
-            }
-        }
+        Err(ConnectionErr::InvalidHandshake)
     }
 
     async fn send_message(&mut self, message: &Message) -> Result<Message, ConnectionErr> {
-        if self.socket.is_none() {
-            return Err(ConnectionErr::InvalidConnection);
-        }
+        let stream = match self.socket.as_mut() {
+            Some(stream) => stream.as_mut(),
+            None => return Err(ConnectionErr::InvalidConnection),
+        };
 
-        let stream = self.socket.as_mut().unwrap();
-
-        loop {
-            let ready = stream.ready(Interest::WRITABLE).await.unwrap();
-
-            if ready.is_writable() {
-                match stream.write_all(&message.to_bytes()).await {
-                    Ok(_) => {
-                        break;
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(ConnectionErr::TokioWriteError(e));
-                    }
-                }
-            }
-        }
+        stream.write_all(&message.to_bytes()).await?;
 
         Ok(Message::from_stream(stream).await?)
     }

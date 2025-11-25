@@ -39,7 +39,7 @@ impl Handshake {
         }
     }
 
-    pub fn from_bytes(bytes: &Vec<u8>) -> Result<Self, HandshakeErr> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, HandshakeErr> {
         if bytes.len() != TOTAL_SIZE {
             return Err(HandshakeErr::InvalidSize);
         }
