@@ -88,7 +88,8 @@ impl PeerManager {
     /// Sends a peer request to the tracker and returns a vector of Peers
     /// Also updates self.new_peer_inverval (in seconds) from tracker response
     async fn get_new_peers(&mut self) -> Result<Vec<Peer>, PeerManagerError> {
-        let response = tracker::send_get_request(&self.meta_info).await;
+        let response =
+            tracker::send_get_request(&self.meta_info, tracker::TrackerEvent::Started).await;
         match response {
             Ok(res) => {
                 if let Some(interval) = res.interval {

@@ -37,10 +37,13 @@ pub struct GetResponse {
     pub failure_reason: Option<String>,
 }
 
-#[derive(Serialize)]
-enum TrackerEvent {
+#[derive(Serialize, Clone, Debug)]
+pub enum TrackerEvent {
+    #[serde(rename = "started")]
     Started,
+    #[serde(rename = "completed")]
     Completed,
+    #[serde(rename = "stopped")]
     Stopped,
 }
 
@@ -107,7 +110,7 @@ impl GetRequest {
         }
 
         Ok(GetRequest {
-            peer_id: "12345678901234567890".to_string(),
+            peer_id: "-RB0001-000000000001".to_string(),
             ip: None,
             port: 6881,
             uploaded: 0,
@@ -118,8 +121,11 @@ impl GetRequest {
     }
 }
 
-pub async fn send_get_request(meta_info: &MetaInfo) -> Result<GetResponse, TrackerErr> {
-    let url = construct_get_url(&meta_info)?;
+pub async fn send_get_request(
+    meta_info: &MetaInfo,
+    event: TrackerEvent,
+) -> Result<GetResponse, TrackerErr> {
+    let url = construct_get_url(&meta_info, &event)?;
     let client = Client::new();
     let res = client
         .get(url)
@@ -139,8 +145,9 @@ pub async fn send_get_request(meta_info: &MetaInfo) -> Result<GetResponse, Track
     Ok(deserial)
 }
 
-fn construct_get_url(meta_info: &MetaInfo) -> Result<Url, TrackerErr> {
-    let payload = GetRequest::from_metainfo(&meta_info)?;
+fn construct_get_url(meta_info: &MetaInfo, event: &TrackerEvent) -> Result<Url, TrackerErr> {
+    let mut payload = GetRequest::from_metainfo(&meta_info)?;
+    payload.event = Some(event.clone());
     let params =
         serde_qs::to_string(&payload).map_err(|serde_error| TrackerErr::SerdeErr(serde_error))?;
     let announce;
