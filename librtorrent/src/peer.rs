@@ -1,5 +1,6 @@
+use std::sync::Arc;
+
 use bytes::{BufMut, Bytes, BytesMut};
-use sha1::{Digest, Sha1};
 use thiserror::Error;
 use tokio::{
     io::{AsyncWriteExt, ErrorKind, Interest},
@@ -11,6 +12,7 @@ use crate::{
     handshake::Handshake,
     message::{Message, MessageErr, MessageType},
     meta_info::{FromBencodeTypeErr, FromBencodemap},
+    piece_manager::PieceManager,
 };
 
 // Peer keys
@@ -39,20 +41,12 @@ pub enum PeerEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct PeerState {
-    choked: bool,
-    interested: bool,
-    bitfield: Vec<bool>,
-}
-
-impl PeerState {
-    pub fn new() -> Self {
-        PeerState {
-            choked: true,
-            interested: false,
-            bitfield: Vec::new(),
-        }
-    }
+pub enum PeerState {
+    Disconnected,
+    Chocked,
+    Interested,
+    Downloading,
+    Idle,
 }
 
 impl FromBencodemap for Peer {
@@ -101,8 +95,8 @@ impl Peer {
             ip,
             port,
             socket: None,
-            my_state: PeerState::new(),
-            their_state: PeerState::new(),
+            my_state: PeerState::Disconnected,
+            their_state: PeerState::Disconnected,
         }
     }
 
@@ -115,32 +109,73 @@ impl Peer {
             .collect()
     }
 
-    pub async fn start(&mut self) -> Result<(), ConnectionErr> {
+    pub async fn start(
+        &mut self,
+        piece_manager: &PieceManager,
+        torrent_hash: Arc<[u8; 20]>,
+    ) -> Result<(), ConnectionErr> {
+        self.connect(&Handshake::new(*torrent_hash, [0u8; 20]))
+            .await?;
+        self.log("Connected to peer");
+
+        let bitfield = piece_manager.get_bitfield();
+
+        self.log("Sending bitfield!");
+        let their_bitfield = self.send_bitfield(&bitfield).await?;
+        self.log("Bitfield received!");
+
+        let piece_length = piece_manager.get_piece_length();
+
+        while let Some(index) = piece_manager.get_next_piece(&their_bitfield) {
+            self.log(&format!("Attempting to download piece {index}"));
+            if matches!(self.my_state, PeerState::Chocked) {
+                self.log("Peer is chocking us, sending interested");
+                self.send_interested().await?;
+
+                self.my_state = PeerState::Interested;
+            }
+
+            let result = self.download_piece(index, piece_length as u64).await?;
+            if piece_manager.add_piece(&index, result) {
+                self.log(&format!(
+                    "Piece successfully downloaded and verified! {index}"
+                ));
+            } else {
+                self.log(&format!("Piece download failed! {index}"));
+            }
+        }
+
         Ok(())
     }
 
-    pub async fn download_piece(
-        &mut self,
-        piece_index: u64,
-        piece_length: u64,
-        piece_hash: [u8; 20],
-    ) -> Result<(), ConnectionErr> {
+    pub async fn send_interested(&mut self) -> Result<(), ConnectionErr> {
         if self.socket.is_none() {
             return Err(ConnectionErr::InvalidConnection);
         }
 
-        //let payload = Bytes::from(&piece_index.to_be_bytes());
         let message = Message::new(1, Some(MessageType::Interested as u8), None);
 
-        let res = self.send_message(&message).await?;
+        self.log("Sending interested message");
 
-        println!("Sent interested message");
+        let res = self.send_message(&message).await?;
 
         if res.id != Some(MessageType::Unchoke as u8) {
             self.wait_for_message(MessageType::Unchoke as u8).await?;
         }
 
-        println!("Recieved unchoke message");
+        self.log("Recieved unchoke message");
+
+        Ok(())
+    }
+
+    pub async fn download_piece(
+        &mut self,
+        piece_index: usize,
+        piece_length: u64,
+    ) -> Result<Bytes, ConnectionErr> {
+        if self.socket.is_none() {
+            return Err(ConnectionErr::InvalidConnection);
+        }
 
         // Send request for piece
         const MAX_BLOCK_SIZE: usize = (2 as usize).pow(14);
@@ -148,7 +183,9 @@ impl Peer {
         let mut piece_buffer = BytesMut::with_capacity(piece_length as usize);
         let mut remaining = piece_length as usize;
 
-        println!("Downloading piece {piece_index} with {num_blocks} blocks");
+        self.log(&format!(
+            "Downloading piece {piece_index} with {num_blocks} blocks"
+        ));
         for block_index in 0..num_blocks {
             let offset = block_index * MAX_BLOCK_SIZE;
             let block_size = MAX_BLOCK_SIZE.min(remaining);
@@ -165,11 +202,12 @@ impl Peer {
                 payload: Some(buf.freeze()),
             };
 
-            println!("Sending request message");
+            self.log("Sending request message");
 
             let mut res = self.send_message(&message).await?;
-            //println!("Message received {res:#?}");
+            //self.log("Message received {res:#?}");
             if res.id != Some(MessageType::Piece as u8) {
+                self.log("Waiting for piece message");
                 res = self.wait_for_message(MessageType::Piece as u8).await?;
             }
 
@@ -178,21 +216,14 @@ impl Peer {
                 piece_buffer.extend_from_slice(&payload[8..]);
             }
 
-            println!("Block {block_index} of {num_blocks} for piece {piece_index} recieved");
+            self.log(&format!(
+                "Block {block_index} of {num_blocks} for piece {piece_index} recieved"
+            ));
         }
 
-        let downloaded_hash: [u8; 20] = Sha1::digest(&piece_buffer).into();
+        self.log(&format!("Piece recieved {piece_buffer:#?}"));
 
-        if downloaded_hash != piece_hash {
-            return Err(ConnectionErr::UnexpectedMessage(format!(
-                "Incorrect hash for piece {}",
-                piece_index
-            )));
-        }
-
-        println!("Piece recieved {piece_buffer:#?}");
-
-        Ok(())
+        Ok(piece_buffer.freeze())
     }
 
     // Read from socket until we get a message with the specified id
@@ -221,14 +252,30 @@ impl Peer {
         }
     }
 
-    pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Message, ConnectionErr> {
+    pub async fn send_bitfield(&mut self, bitfield: &Bytes) -> Result<Bytes, ConnectionErr> {
         let msg = Message {
             length: (bitfield.len() + 1) as u32,
-            id: Some(5),
+            id: Some(MessageType::Bitfield as u8),
             payload: Some(bitfield.clone()),
         };
 
-        self.send_message(&msg).await
+        let result = self.send_message(&msg).await;
+
+        match result {
+            Ok(msg) if msg.id == Some(MessageType::Bitfield as u8) => {
+                if let Some(payload) = msg.payload {
+                    Ok(payload)
+                } else {
+                    Err(ConnectionErr::UnexpectedMessage(
+                        "Expected Bitfield message payload to be Some".to_string(),
+                    ))
+                }
+            }
+            Err(e) => Err(e),
+            _ => Err(ConnectionErr::UnexpectedMessage(
+                "Expected Bitfield message".to_string(),
+            )),
+        }
     }
 
     /// Establishes a connection and performs handshake with peer
@@ -320,5 +367,9 @@ impl Peer {
                 };
             }
         }
+    }
+
+    fn log(&self, message: &str) {
+        println!("Peer @ {}:{}: {}", self.ip, self.port, message);
     }
 }

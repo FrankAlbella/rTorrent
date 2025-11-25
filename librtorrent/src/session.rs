@@ -16,8 +16,8 @@ impl Session {
         }
     }
 
-    pub async fn start(self: &Self) {
-        for torrent in &self.torrents {
+    pub async fn start(&mut self) {
+        for torrent in &mut self.torrents {
             torrent.start().await;
         }
     }

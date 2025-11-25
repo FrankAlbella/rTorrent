@@ -1,15 +1,15 @@
 use std::sync::Arc;
-
-use bytes::{Bytes, BytesMut};
 use thiserror::Error;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::{
-    handshake::Handshake,
     meta_info::MetaInfo,
     peer::{Peer, PeerEvent},
+    piece_manager::PieceManager,
     tracker::{self, TrackerErr},
 };
+
+const DEFAULT_INTERVAL: usize = 600;
 
 #[derive(Debug, Error)]
 pub enum PeerManagerError {
@@ -27,6 +27,8 @@ pub struct PeerManager {
     sender: mpsc::Sender<PeerEvent>,
     receiver: mpsc::Receiver<PeerEvent>,
     meta_info: Arc<MetaInfo>,
+    new_peer_interval: usize,
+    piece_manager: Arc<PieceManager>,
 }
 
 impl PeerManager {
@@ -37,24 +39,39 @@ impl PeerManager {
             sender: tx,
             receiver: rx,
             meta_info: meta_info.clone(),
+            new_peer_interval: DEFAULT_INTERVAL,
+            piece_manager: Arc::new(PieceManager::new(&meta_info.clone())),
         }
     }
 
-    pub async fn start(&self) {
-        todo!("Add peer manager start function")
-        // tokio::spawn(async move {
-        //     let peers = self.get_new_peers().await;
+    pub async fn start(&mut self) -> Result<(), PeerManagerError> {
+        //todo!("Add peer manager start function")
+        let peers = self.get_new_peers().await?;
+        let hash = Arc::new(self.meta_info.hash);
 
-        //     for peer in peers.unwrap() {
-        //         peer.start().await;
-        //     }
+        let mut handles = Vec::new();
+        for mut peer in peers {
+            let pm = self.piece_manager.clone();
+            let h = hash.clone();
+            handles.push(tokio::spawn(async move {
+                match peer.start(&pm, h).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        println!("Error starting peer: {}", err);
+                    }
+                }
+            }));
+        }
 
-        //     //self.connect_to_peers(peers).await;
-        // });
+        for handle in handles {
+            handle.await.expect("Task panicked");
+        }
 
         // tokio::spawn(async {
         //     self.main_loop().await;
         // });
+        //
+        Ok(())
     }
 
     async fn main_loop(&mut self) {
@@ -68,10 +85,16 @@ impl PeerManager {
         }
     }
 
-    async fn get_new_peers(&self) -> Result<Vec<Peer>, PeerManagerError> {
+    /// Sends a peer request to the tracker and returns a vector of Peers
+    /// Also updates self.new_peer_inverval (in seconds) from tracker response
+    async fn get_new_peers(&mut self) -> Result<Vec<Peer>, PeerManagerError> {
         let response = tracker::send_get_request(&self.meta_info).await;
         match response {
             Ok(res) => {
+                if let Some(interval) = res.interval {
+                    self.new_peer_interval = interval as usize;
+                }
+
                 if let Some(peers_vec) = res.peers {
                     Ok(peers_vec)
                 } else {
@@ -80,64 +103,5 @@ impl PeerManager {
             }
             Err(err) => Err(PeerManagerError::TrackerError(err)),
         }
-    }
-
-    pub async fn connect_to_peers(&self, peers: Vec<Peer>) {
-        let mut handles = Vec::new();
-
-        for mut peer in peers {
-            let hash_clone = self.meta_info.hash.clone();
-            let peers_vec_clone = self.peers.clone();
-            let bitfield = self.get_bitfield();
-            let piece_length = self.meta_info.info.piece_length;
-            let piece_hash = self.meta_info.info.get_piece_hash(0).unwrap();
-            handles.push(tokio::spawn(async move {
-                match peer.connect(&Handshake::new(hash_clone, [0; 20])).await {
-                    Ok(_) => {
-                        //let mut peers = peers_vec_clone.lock().await;
-                        //peers.push(peer.start());
-                        println!("Connected to peer");
-                    }
-                    Err(e) => {
-                        println!("Failed to connect to peer: {:#?}", e);
-                        return;
-                    }
-                }
-
-                match peer.send_bitfield(&bitfield).await {
-                    Ok(_) => println!("Bitfield received!"),
-                    Err(e) => {
-                        println!("Failed to send bitfield: {:#?}", e);
-                        return;
-                    }
-                }
-
-                match peer
-                    .download_piece(0, piece_length as u64, piece_hash)
-                    .await
-                {
-                    Ok(result) => println!("Downloaded piece: {:#?}", result),
-                    Err(e) => println!("Failed to download piece: {:#?}", e),
-                }
-            }));
-        }
-
-        for handle in handles {
-            handle.await.expect("Task panicked");
-        }
-    }
-
-    //TODO: Update and move to piece manager
-    //TODO: Keep track of what pieces we have
-    pub fn get_bitfield(&self) -> Bytes {
-        let total_length = self.meta_info.info.length.unwrap();
-        let piece_length = self.meta_info.info.piece_length;
-        let num_pieces = (total_length + piece_length - 1) / piece_length;
-
-        let num_bytes = (num_pieces + 7) / 8;
-
-        let mut buf_bitfield = BytesMut::new();
-        buf_bitfield.resize(num_bytes as usize, 0);
-        buf_bitfield.freeze()
     }
 }

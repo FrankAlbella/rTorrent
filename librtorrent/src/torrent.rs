@@ -33,8 +33,9 @@ impl Torrent {
         }
     }
 
-    pub async fn start(self: &Self) {
-        self.peer_manager.start().await;
+    pub async fn start(&mut self) {
+        let result = self.peer_manager.start().await;
+        println!("Torrent started {result:#?}");
     }
 
     pub fn from_file(path: &PathBuf) -> Result<Self, TorrentErr> {
