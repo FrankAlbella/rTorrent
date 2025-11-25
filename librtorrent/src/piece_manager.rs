@@ -1,9 +1,20 @@
-use std::{collections::HashMap, sync::Mutex, sync::RwLock};
+use std::{
+    collections::HashMap,
+    io::SeekFrom,
+    sync::{Mutex, RwLock},
+};
 
 use bytes::{Bytes, BytesMut};
 use sha1::{Digest, Sha1};
+use tokio::{
+    fs::{File, OpenOptions},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+};
 
 use crate::meta_info::MetaInfo;
+
+//const SAVE_BYTES_THRESHOLD: usize = 1 << 24; // 16 MB in bytes
+const SAVE_BYTES_THRESHOLD: usize = 1 << 20; // 8 MB in bytes
 
 #[derive(Debug)]
 pub struct PieceManager {
@@ -19,17 +30,32 @@ enum PieceStatus {
     NotStarted,
     InProgress,
     Completed(Bytes),
+    OnDisk,
 }
 
 impl PieceManager {
-    pub fn new(meta_info: &MetaInfo) -> Self {
-        PieceManager {
+    pub async fn new(meta_info: &MetaInfo) -> Self {
+        let mut pm = PieceManager {
             bitfield: RwLock::new(Self::meta_info_to_bitfield(meta_info)),
             piece_hashes: meta_info.info.get_piece_hashes(),
             piece_length: meta_info.info.piece_length as usize,
             torrent_hash: meta_info.hash.clone(),
             piece_map: Mutex::new(HashMap::new()),
-        }
+        };
+
+        match pm.load_pieces().await {
+            Ok(_) => {
+                println!(
+                    "Pieces loaded from disk successfully with bitfield: {:#?}",
+                    pm.bitfield
+                )
+            }
+            Err(e) => println!("Failed to load pieces: {}", e),
+        };
+
+        println!("Bitfield: {:#?}", pm.bitfield);
+
+        pm
     }
 
     fn meta_info_to_bitfield(meta_info: &MetaInfo) -> BytesMut {
@@ -115,7 +141,7 @@ impl PieceManager {
 
     /// Verify piece hash and, if valid, store it and update local bitfield
     /// Returns true if the piece was successfully added, false otherwise.
-    pub fn add_piece(&self, index: &usize, bytes: Bytes) -> bool {
+    pub async fn add_piece(&self, index: &usize, bytes: Bytes) -> bool {
         if self.is_piece_valid(&index, &bytes) {
             {
                 let mut map = self.piece_map.lock().unwrap();
@@ -123,6 +149,10 @@ impl PieceManager {
             }
 
             self.update_bitfield(index);
+            if self.should_save() {
+                self.save_to_disk().await.unwrap();
+            }
+
             true
         } else {
             let mut map = self.piece_map.lock().unwrap();
@@ -153,8 +183,90 @@ impl PieceManager {
         bitfield[byte_index] |= mask;
     }
 
-    pub fn save_to_disk(&self) {
-        todo!()
+    fn should_save(&self) -> bool {
+        let map = self.piece_map.lock().unwrap();
+
+        let bytes_in_ram: usize = map
+            .values()
+            .filter_map(|status| match status {
+                PieceStatus::Completed(bytes) => Some(bytes.len()),
+                _ => None,
+            })
+            .sum();
+
+        let all_pieces_ready = map
+            .values()
+            .all(|status| matches!(status, PieceStatus::Completed(_) | PieceStatus::OnDisk));
+
+        bytes_in_ram >= SAVE_BYTES_THRESHOLD || all_pieces_ready
+    }
+
+    /// Save the pieces to disk
+    // TODO: Move to dedicated File Manager and use real file name
+    pub async fn save_to_disk(&self) -> Result<(), std::io::Error> {
+        let mut file = OpenOptions::new()
+            .read(false)
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open("result.iso")
+            .await?;
+
+        let piece_count = self.piece_hashes.len();
+        println!("Piece count {piece_count}");
+        for index in 0..piece_count {
+            let buf = {
+                let map = self.piece_map.lock().unwrap();
+                match map.get(&index) {
+                    Some(PieceStatus::Completed(bytes)) => Some(bytes.clone()),
+                    _ => None,
+                }
+            };
+
+            if let Some(data) = buf {
+                let file_offset = index as u64 * self.piece_length as u64;
+                file.seek(SeekFrom::Start(file_offset)).await?;
+
+                //println!("Saving piece {index} with data {data:#?}");
+
+                file.write_all(&data).await?;
+                println!("Piece {index} saved to disk!");
+
+                let mut map = self.piece_map.lock().unwrap();
+                map.insert(index, PieceStatus::OnDisk);
+            }
+        }
+
+        file.sync_all().await?;
+
+        Ok(())
+    }
+
+    // TODO: Move to dedicated File Manager and use real file name
+    async fn load_pieces(&mut self) -> Result<(), std::io::Error> {
+        println!("Loading pieces");
+        let mut file = File::open("result.iso").await?;
+        let piece_count = self.piece_hashes.len();
+
+        for index in 0..piece_count {
+            let file_offset = index as u64 * self.piece_length as u64;
+            file.seek(SeekFrom::Start(file_offset)).await?;
+
+            let mut buf = BytesMut::with_capacity(self.piece_length);
+            buf.resize(self.piece_length, 0);
+            file.read_exact(&mut buf).await?;
+
+            if self.is_piece_valid(&index, &buf.freeze()) {
+                {
+                    let mut map = self.piece_map.lock().unwrap();
+                    map.insert(index, PieceStatus::OnDisk);
+                }
+
+                self.update_bitfield(&index);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -164,8 +276,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_get_next_piece_index_0() {
+    #[tokio::test]
+    async fn test_get_next_piece_index_0() {
         let meta_info = MetaInfo {
             announce: Some("test".to_string()),
             nodes: None,
@@ -181,13 +293,13 @@ mod tests {
                 private: None,
             },
         };
-        let piece_manager = PieceManager::new(&meta_info);
+        let piece_manager = PieceManager::new(&meta_info).await;
         let bitfield = Bytes::from(vec![0b10000000]);
         assert_eq!(piece_manager.get_next_piece(&bitfield), Some(0));
     }
 
-    #[test]
-    fn test_get_next_piece_index_7() {
+    #[tokio::test]
+    async fn test_get_next_piece_index_7() {
         let meta_info = MetaInfo {
             announce: Some("test".to_string()),
             nodes: None,
@@ -203,13 +315,13 @@ mod tests {
                 private: None,
             },
         };
-        let piece_manager = PieceManager::new(&meta_info);
+        let piece_manager = PieceManager::new(&meta_info).await;
         let bitfield = Bytes::from(vec![0b00000001]);
         assert_eq!(piece_manager.get_next_piece(&bitfield), Some(7));
     }
 
-    #[test]
-    fn test_get_next_piece_mutliple_pieces() {
+    #[tokio::test]
+    async fn test_get_next_piece_mutliple_pieces() {
         let meta_info = MetaInfo {
             announce: Some("test".to_string()),
             nodes: None,
@@ -225,7 +337,7 @@ mod tests {
                 private: None,
             },
         };
-        let piece_manager = PieceManager::new(&meta_info);
+        let piece_manager = PieceManager::new(&meta_info).await;
         let bitfield = Bytes::from(vec![0b00000011]);
         assert_eq!(piece_manager.get_next_piece(&bitfield), Some(6));
         assert_eq!(piece_manager.get_next_piece(&bitfield), Some(7));

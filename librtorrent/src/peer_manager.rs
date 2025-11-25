@@ -32,7 +32,7 @@ pub struct PeerManager {
 }
 
 impl PeerManager {
-    pub fn new(meta_info: Arc<MetaInfo>) -> Self {
+    pub async fn new(meta_info: Arc<MetaInfo>) -> Self {
         let (tx, rx) = mpsc::channel::<PeerEvent>(64);
         PeerManager {
             peers: Arc::new(Mutex::new(Vec::new())),
@@ -40,7 +40,7 @@ impl PeerManager {
             receiver: rx,
             meta_info: meta_info.clone(),
             new_peer_interval: DEFAULT_INTERVAL,
-            piece_manager: Arc::new(PieceManager::new(&meta_info.clone())),
+            piece_manager: Arc::new(PieceManager::new(&meta_info.clone()).await),
         }
     }
 

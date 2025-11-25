@@ -25,11 +25,11 @@ pub enum TorrentErr {
 }
 
 impl Torrent {
-    pub fn new(meta_info: MetaInfo) -> Self {
+    pub async fn new(meta_info: MetaInfo) -> Self {
         let arc = Arc::new(meta_info);
         Torrent {
             meta_info: arc.clone(),
-            peer_manager: PeerManager::new(arc.clone()),
+            peer_manager: PeerManager::new(arc.clone()).await,
         }
     }
 
@@ -38,7 +38,7 @@ impl Torrent {
         println!("Torrent started {result:#?}");
     }
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, TorrentErr> {
+    pub async fn from_file(path: &PathBuf) -> Result<Self, TorrentErr> {
         let contents = fs::read(path)?;
 
         let bencode_vec = bencode::decode_to_vec(&contents)?;
@@ -47,7 +47,7 @@ impl Torrent {
             match first {
                 BencodeType::Dictionary(map) => {
                     let data = MetaInfo::from_bencodemap(map)?;
-                    return Ok(Torrent::new(data));
+                    return Ok(Torrent::new(data).await);
                 }
                 _ => Err(TorrentErr::InvalidFile(path.clone())),
             }

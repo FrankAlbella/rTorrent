@@ -22,9 +22,9 @@ impl Session {
         }
     }
 
-    pub fn add_torrent(self: &mut Self, path: &str) {
+    pub async fn add_torrent(self: &mut Self, path: &str) {
         if Session::is_torrent_file(path) {
-            match Torrent::from_file(&PathBuf::from(path)) {
+            match Torrent::from_file(&PathBuf::from(path)).await {
                 Ok(torrent) => self.torrents.push(torrent),
                 Err(error) => warn!("Failed to add torrent with error: {error:#?}"),
             }

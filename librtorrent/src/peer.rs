@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, ErrorKind, Interest},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 
@@ -25,7 +25,7 @@ pub struct Peer {
     pub peer_id: Option<String>,
     pub ip: String,
     pub port: i64,
-    pub socket: Option<Box<TcpStream>>,
+    pub socket: Option<TcpStream>,
     pub my_state: PeerState,
     pub their_state: PeerState,
 }
@@ -138,7 +138,7 @@ impl Peer {
             }
 
             let result = self.download_piece(index, piece_length as u64).await?;
-            if piece_manager.add_piece(&index, result) {
+            if piece_manager.add_piece(&index, result).await {
                 self.log(&format!(
                     "Piece {index} successfully downloaded and verified!"
                 ));
@@ -262,7 +262,7 @@ impl Peer {
 
         if let Ok(hs) = Handshake::from_bytes(&buf) {
             if hs.is_valid(&handshake) {
-                self.socket = Some(Box::new(stream));
+                self.socket = Some(stream);
                 self.my_state = PeerState::Choked;
                 self.their_state = PeerState::Choked;
                 return Ok(());
@@ -274,7 +274,7 @@ impl Peer {
 
     async fn send_message(&mut self, message: &Message) -> Result<Message, ConnectionErr> {
         let stream = match self.socket.as_mut() {
-            Some(stream) => stream.as_mut(),
+            Some(stream) => stream,
             None => return Err(ConnectionErr::InvalidConnection),
         };
 
