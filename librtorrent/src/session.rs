@@ -9,6 +9,12 @@ pub struct Session {
     torrents: Vec<Torrent>,
 }
 
+impl Default for Session {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Session {
     pub fn new() -> Self {
         Self {
@@ -22,7 +28,7 @@ impl Session {
         }
     }
 
-    pub async fn add_torrent(self: &mut Self, path: &str) {
+    pub async fn add_torrent(&mut self, path: &str) {
         if Session::is_torrent_file(path) {
             match Torrent::from_file(&PathBuf::from(path)).await {
                 Ok(torrent) => self.torrents.push(torrent),

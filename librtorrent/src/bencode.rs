@@ -51,7 +51,7 @@ impl TryFrom<&BencodeType> for i64 {
     type Error = BencodeGetErr;
     fn try_from(value: &BencodeType) -> Result<Self, Self::Error> {
         match value {
-            BencodeType::Integer(x) => Ok(x.clone()),
+            BencodeType::Integer(x) => Ok(*x),
             _ => Err(BencodeGetErr::InvalidConversion),
         }
     }
@@ -103,15 +103,15 @@ impl<'a> TryFrom<&'a BencodeType> for PathBuf {
 // TODO: update T to accept TryInfo instead;
 // https://doc.rust-lang.org/std/convert/trait.TryFrom.html
 pub trait BencodeMapDecoder {
-    fn get_decode<'a, T>(self: &'a Self, key: &str) -> Option<T>
+    fn get_decode<'a, T>(&'a self, key: &str) -> Option<T>
     where
         T: TryFrom<&'a BencodeType>;
-    fn try_decode(bytes: &Vec<u8>) -> Result<BencodeMap, BencodeParseErr>;
-    fn print_keys(self: &Self);
+    fn try_decode(bytes: &[u8]) -> Result<BencodeMap, BencodeParseErr>;
+    fn print_keys(&self);
 }
 
 impl BencodeMapDecoder for BencodeMap {
-    fn get_decode<'a, T>(self: &'a Self, key: &str) -> Option<T>
+    fn get_decode<'a, T>(&'a self, key: &str) -> Option<T>
     where
         T: TryFrom<&'a BencodeType>,
     {
@@ -122,7 +122,7 @@ impl BencodeMapDecoder for BencodeMap {
         }
     }
 
-    fn try_decode(bytes: &Vec<u8>) -> Result<BencodeMap, BencodeParseErr> {
+    fn try_decode(bytes: &[u8]) -> Result<BencodeMap, BencodeParseErr> {
         match bytes.first() {
             Some(_) => match read_dictionary(&mut bytes.iter().cloned().peekable().clone())? {
                 BencodeType::Dictionary(x) => Ok(x),
@@ -136,9 +136,9 @@ impl BencodeMapDecoder for BencodeMap {
         }
     }
 
-    fn print_keys(self: &Self) {
-        let mut iter = self.keys().into_iter();
-        while let Some(x) = iter.next() {
+    fn print_keys(&self) {
+        let iter = self.keys();
+        for x in iter {
             if let Ok(y) = String::from_utf8(x.clone()) {
                 println!("{y}");
             } else {
@@ -149,11 +149,11 @@ impl BencodeMapDecoder for BencodeMap {
 }
 
 pub trait BencodeMapEncoder {
-    fn get_encode(self: &Self) -> Vec<u8>;
+    fn get_encode(&self) -> Vec<u8>;
 }
 
 impl BencodeMapEncoder for BencodeMap {
-    fn get_encode(self: &Self) -> Vec<u8> {
+    fn get_encode(&self) -> Vec<u8> {
         let wrapper = BencodeType::Dictionary(self.clone());
         encode(&wrapper)
     }
@@ -174,14 +174,14 @@ impl Display for BencodeType {
 }
 
 impl BencodeType {
-    pub fn get_string(self: &Self) -> Result<Vec<u8>, BencodeGetErr> {
+    pub fn get_string(&self) -> Result<Vec<u8>, BencodeGetErr> {
         match self {
             Self::String(x) => Ok(x.clone()),
             _ => Err(BencodeGetErr::InvalidType),
         }
     }
 
-    pub fn get_utf8_string(self: &Self) -> Result<String, BencodeGetErr> {
+    pub fn get_utf8_string(&self) -> Result<String, BencodeGetErr> {
         match self {
             Self::String(x) => String::from_utf8(x.clone()).map_err(|_| BencodeGetErr::InvalidUtf8),
             _ => Err(BencodeGetErr::InvalidUtf8),
@@ -205,12 +205,12 @@ pub enum BencodeParseErr {
     InvalidStringBencode(String),
 }
 
-pub fn decode_to_vec(encoded_value: &Vec<u8>) -> Result<Vec<BencodeType>, BencodeParseErr> {
+pub fn decode_to_vec(encoded_value: &[u8]) -> Result<Vec<BencodeType>, BencodeParseErr> {
     let mut vec: Vec<BencodeType> = Vec::new();
 
     let mut iter = encoded_value.iter().copied().peekable();
 
-    while let Some(_) = iter.peek() {
+    while iter.peek().is_some() {
         vec.push(read_value(&mut iter)?);
     }
 
@@ -236,7 +236,7 @@ fn read_value(
 fn read_integer(iter: &mut impl Iterator<Item = u8>) -> Result<BencodeType, BencodeParseErr> {
     let mut temp = String::new();
 
-    while let Some(x) = iter.next() {
+    for x in iter.by_ref() {
         match x {
             b'-' => temp.push(char::from(x)),
             b'0'..=b'9' => temp.push(char::from(x)),
@@ -355,11 +355,11 @@ fn read_string(iter: &mut impl Iterator<Item = u8>) -> Result<BencodeType, Benco
     Ok(BencodeType::String(result))
 }
 
-fn encode_string(bytes: &Vec<u8>) -> Vec<u8> {
+fn encode_string(bytes: &[u8]) -> Vec<u8> {
     let mut buffer = Vec::new();
     buffer.extend_from_slice(bytes.len().to_string().as_bytes());
     buffer.push(STRING_DELIMITER);
-    buffer.extend_from_slice(&bytes);
+    buffer.extend_from_slice(bytes);
 
     buffer
 }
@@ -400,7 +400,7 @@ pub fn encode_vec(values: &Vec<BencodeType>) -> Vec<u8> {
     let mut buffer = Vec::new();
 
     for x in values {
-        buffer.extend_from_slice(&encode(&x));
+        buffer.extend_from_slice(&encode(x));
     }
 
     buffer

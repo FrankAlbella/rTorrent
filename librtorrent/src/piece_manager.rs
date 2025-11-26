@@ -39,7 +39,7 @@ impl PieceManager {
             bitfield: RwLock::new(Self::meta_info_to_bitfield(meta_info)),
             piece_hashes: meta_info.info.get_piece_hashes(),
             piece_length: meta_info.info.piece_length as usize,
-            torrent_hash: meta_info.hash.clone(),
+            torrent_hash: meta_info.hash,
             piece_map: Mutex::new(HashMap::new()),
         };
 
@@ -75,7 +75,7 @@ impl PieceManager {
     }
 
     pub fn is_piece_valid(&self, piece_index: &usize, piece: &Bytes) -> bool {
-        let downloaded_hash: [u8; 20] = Sha1::digest(&piece).into();
+        let downloaded_hash: [u8; 20] = Sha1::digest(piece).into();
 
         if let Some(hash) = self.piece_hashes.get(*piece_index) {
             downloaded_hash == *hash
@@ -142,7 +142,7 @@ impl PieceManager {
     /// Verify piece hash and, if valid, store it and update local bitfield
     /// Returns true if the piece was successfully added, false otherwise.
     pub async fn add_piece(&self, index: &usize, bytes: Bytes) -> bool {
-        if self.is_piece_valid(&index, &bytes) {
+        if self.is_piece_valid(index, &bytes) {
             {
                 let mut map = self.piece_map.lock().unwrap();
                 map.insert(*index, PieceStatus::Completed(bytes));

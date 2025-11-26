@@ -47,7 +47,7 @@ impl Torrent {
             match first {
                 BencodeType::Dictionary(map) => {
                     let data = MetaInfo::from_bencodemap(map)?;
-                    return Ok(Torrent::new(data).await);
+                    Ok(Torrent::new(data).await)
                 }
                 _ => Err(TorrentErr::InvalidFile(path.clone())),
             }

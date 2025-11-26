@@ -77,17 +77,15 @@ impl FromBencodemap for GetResponse {
 
         let peers: Option<Vec<BencodeMap>> = bencode_map.get_decode(PEERS_KEY);
 
-        let peers_final: Option<Vec<Peer>>;
-
-        match peers {
-            Some(x) => peers_final = Some(Peer::from_bencodemap_list(&x)?),
-            None => peers_final = None,
-        }
+        let peers_final: Option<Vec<Peer>> = match peers {
+            Some(x) => Some(Peer::from_bencodemap_list(&x)?),
+            None => None,
+        };
 
         Ok(GetResponse {
-            interval: interval,
+            interval,
             peers: peers_final,
-            failure_reason: failure_reason,
+            failure_reason,
         })
     }
 
@@ -100,14 +98,10 @@ impl FromBencodemap for GetResponse {
 
 impl GetRequest {
     pub fn from_metainfo(meta_info: &MetaInfo) -> Result<Self, TrackerErr> {
-        let left;
-
-        match meta_info.info.is_single_or_multi_file() {
-            TorrentType::SingleFile => {
-                left = meta_info.info.length.ok_or(TrackerErr::InvalidMetaInfo)?
-            }
+        let left = match meta_info.info.is_single_or_multi_file() {
+            TorrentType::SingleFile => meta_info.info.length.ok_or(TrackerErr::InvalidMetaInfo)?,
             TorrentType::MultiFile => todo!("Add support for multi-file torrents"),
-        }
+        };
 
         Ok(GetRequest {
             peer_id: "-RB0001-000000000001".to_string(),
@@ -115,7 +109,7 @@ impl GetRequest {
             port: 6881,
             uploaded: 0,
             downloaded: 0,
-            left: left,
+            left,
             event: None,
         })
     }
@@ -125,37 +119,32 @@ pub async fn send_get_request(
     meta_info: &MetaInfo,
     event: TrackerEvent,
 ) -> Result<GetResponse, TrackerErr> {
-    let url = construct_get_url(&meta_info, &event)?;
+    let url = construct_get_url(meta_info, &event)?;
     let client = Client::new();
     let res = client
         .get(url)
         .send()
         .await
-        .map_err(|req_error| TrackerErr::ReqwestError(req_error))?
+        .map_err(TrackerErr::ReqwestError)?
         .bytes()
         .await
-        .map_err(|req_error| TrackerErr::ReqwestError(req_error))?;
+        .map_err(TrackerErr::ReqwestError)?;
 
-    let map = BencodeMap::try_decode(&res.into())
-        .map_err(|bencode_err| TrackerErr::BencodeParseErr(bencode_err))?;
+    let map = BencodeMap::try_decode(&res).map_err(TrackerErr::BencodeParseErr)?;
 
-    let deserial = GetResponse::from_bencodemap(&map)
-        .map_err(|from_error| TrackerErr::FromBencodeTypeErr(from_error))?;
+    let deserial = GetResponse::from_bencodemap(&map).map_err(TrackerErr::FromBencodeTypeErr)?;
 
     Ok(deserial)
 }
 
 fn construct_get_url(meta_info: &MetaInfo, event: &TrackerEvent) -> Result<Url, TrackerErr> {
-    let mut payload = GetRequest::from_metainfo(&meta_info)?;
+    let mut payload = GetRequest::from_metainfo(meta_info)?;
     payload.event = Some(event.clone());
-    let params =
-        serde_qs::to_string(&payload).map_err(|serde_error| TrackerErr::SerdeErr(serde_error))?;
-    let announce;
-
-    match meta_info.announce.clone() {
-        Some(url) => announce = url,
+    let params = serde_qs::to_string(&payload).map_err(TrackerErr::SerdeErr)?;
+    let announce = match meta_info.announce.clone() {
+        Some(url) => url,
         _ => todo!("Support for torrents without announce field"),
-    }
+    };
 
     Url::from_str(&format!(
         "{}?{}&info_hash={}",
@@ -163,5 +152,5 @@ fn construct_get_url(meta_info: &MetaInfo, event: &TrackerEvent) -> Result<Url, 
         params,
         byte_serialize(&meta_info.hash).collect::<String>(),
     ))
-    .map_err(|parse_error| TrackerErr::UrlParseError(parse_error))
+    .map_err(TrackerErr::UrlParseError)
 }

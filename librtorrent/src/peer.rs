@@ -103,12 +103,9 @@ impl Peer {
     }
 
     pub fn from_bencodemap_list(
-        bencode_map: &Vec<BencodeMap>,
+        bencode_map: &[BencodeMap],
     ) -> Result<Vec<Self>, FromBencodeTypeErr> {
-        bencode_map
-            .iter()
-            .map(|x| Peer::from_bencodemap(x))
-            .collect()
+        bencode_map.iter().map(Peer::from_bencodemap).collect()
     }
 
     pub async fn start(
@@ -174,8 +171,8 @@ impl Peer {
         piece_length: u64,
     ) -> Result<Bytes, ConnectionErr> {
         // Send request for piece
-        const MAX_BLOCK_SIZE: usize = (2 as usize).pow(14);
-        let num_blocks = (piece_length as usize + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
+        const MAX_BLOCK_SIZE: usize = 1 << 14; // 16KB
+        let num_blocks = (piece_length as usize).div_ceil(MAX_BLOCK_SIZE);
         let mut piece_buffer = BytesMut::with_capacity(piece_length as usize);
         let mut remaining = piece_length as usize;
 
@@ -185,7 +182,7 @@ impl Peer {
         for block_index in 0..num_blocks {
             let offset = block_index * MAX_BLOCK_SIZE;
             let block_size = MAX_BLOCK_SIZE.min(remaining);
-            remaining = remaining - block_size;
+            remaining -= block_size;
 
             let message = Message::Request {
                 index: piece_index as u32,
@@ -199,8 +196,8 @@ impl Peer {
 
             match res {
                 Message::Piece {
-                    index,
-                    begin,
+                    index: _,
+                    begin: _,
                     block,
                 } => {
                     piece_buffer.extend_from_slice(&block);
@@ -239,10 +236,10 @@ impl Peer {
     }
 
     /// Establishes a connection and performs handshake with peer
-    pub async fn connect(self: &mut Self, handshake: &Handshake) -> Result<(), ConnectionErr> {
+    pub async fn connect(&mut self, handshake: &Handshake) -> Result<(), ConnectionErr> {
         let mut stream = TcpStream::connect(format!("{}:{}", self.ip, self.port))
             .await
-            .map_err(|e| ConnectionErr::TokioConnectError(e))?;
+            .map_err(ConnectionErr::TokioConnectError)?;
 
         stream.write_all(&handshake.to_bytes()).await?;
 
@@ -250,7 +247,7 @@ impl Peer {
         stream.read_exact(&mut buf).await?;
 
         if let Ok(hs) = Handshake::from_bytes(&buf) {
-            if hs.is_valid(&handshake) {
+            if hs.is_valid(handshake) {
                 self.socket = Some(stream);
                 self.my_state = PeerState::Choked;
                 self.their_state = PeerState::Choked;

@@ -73,7 +73,7 @@ pub enum TorrentType {
 }
 
 impl TorrentInfo {
-    pub fn is_single_or_multi_file(self: &Self) -> TorrentType {
+    pub fn is_single_or_multi_file(&self) -> TorrentType {
         match self.files.is_none() {
             true => TorrentType::SingleFile,
             false => TorrentType::MultiFile,
@@ -108,10 +108,7 @@ impl FromBencodemap for FileInfo {
             .get_decode(PATH_KEY)
             .ok_or(FromBencodeTypeErr::MissingValue(String::from(PATH_KEY)))?;
 
-        Ok(FileInfo {
-            length: length,
-            path: path,
-        })
+        Ok(FileInfo { length, path })
     }
 
     fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
@@ -147,26 +144,24 @@ impl FromBencodemap for TorrentInfo {
         // TODO: rewrite this logic
         let mut final_vec = Vec::new();
         if let Some(files_vec) = files {
-            let mut iter = files_vec.iter();
-            while let Some(x) = iter.next() {
+            let iter = files_vec.iter();
+            for x in iter {
                 final_vec.push(FileInfo::from_bencodemap(x)?);
             }
         }
 
-        let final_file;
-
-        match final_vec.is_empty() {
-            true => final_file = None,
-            false => final_file = Some(final_vec),
-        }
+        let final_file = match final_vec.is_empty() {
+            true => None,
+            false => Some(final_vec),
+        };
 
         Ok(TorrentInfo {
-            name: name,
-            piece_length: piece_length,
-            pieces: pieces,
-            length: length,
+            name,
+            piece_length,
+            pieces,
+            length,
             files: final_file,
-            private: private,
+            private,
         })
     }
 
@@ -209,11 +204,11 @@ impl FromBencodemap for MetaInfo {
             .ok_or(FromBencodeTypeErr::MissingValue(String::from(INFO_KEY)))?;
 
         Ok(MetaInfo {
-            announce: announce,
+            announce,
             info: TorrentInfo::from_bencodemap(&info)?,
-            nodes: nodes,
-            announce_list: announce_list,
-            url_list: url_list,
+            nodes,
+            announce_list,
+            url_list,
             hash: Sha1::digest(info.get_encode()).into(),
         })
     }

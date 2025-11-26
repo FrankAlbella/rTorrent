@@ -34,8 +34,8 @@ impl Handshake {
             length: PROTOCOL_SIZE.try_into().unwrap(),
             protocol: *PROTOCOL,
             reserved: [0; RESERVED_SIZE],
-            info_hash: info_hash,
-            peer_id: peer_id,
+            info_hash,
+            peer_id,
         }
     }
 
@@ -53,7 +53,7 @@ impl Handshake {
         })
     }
 
-    pub fn to_bytes(self: &Self) -> [u8; TOTAL_SIZE] {
+    pub fn to_bytes(&self) -> [u8; TOTAL_SIZE] {
         let mut result: [u8; TOTAL_SIZE] = [0; TOTAL_SIZE];
         result[LEGNTH_OFFSET] = self.length;
         result[PROTOCOL_OFFSET..RESERVED_OFFSET].copy_from_slice(&self.protocol);
@@ -63,7 +63,7 @@ impl Handshake {
         result
     }
 
-    pub fn is_valid(self: &Self, other: &Handshake) -> bool {
+    pub fn is_valid(&self, other: &Handshake) -> bool {
         self.length == other.length
             && self.protocol == other.protocol
             && self.info_hash == other.info_hash

@@ -127,7 +127,7 @@ impl Message {
             Message::Bitfield { bitfield } => {
                 buf.put_u32(ID_SIZE + bitfield.len() as u32);
                 buf.put_u8(MessageId::Bitfield as u8);
-                buf.extend_from_slice(&bitfield);
+                buf.extend_from_slice(bitfield);
                 buf.freeze()
             }
             Message::Request {
@@ -151,7 +151,7 @@ impl Message {
                 buf.put_u8(MessageId::Piece as u8);
                 buf.put_u32(*index);
                 buf.put_u32(*begin);
-                buf.extend_from_slice(&block);
+                buf.extend_from_slice(block);
                 buf.freeze()
             }
             Message::Cancel {
@@ -182,7 +182,7 @@ impl Message {
 
         let length = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
 
-        if length == 0 as u32 {
+        if length == 0u32 {
             return Ok(Message::KeepAlive);
         }
 
