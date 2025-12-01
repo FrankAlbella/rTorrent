@@ -11,7 +11,7 @@ use crate::{
     bencode::{BencodeMap, BencodeMapDecoder},
     handshake::Handshake,
     message::{Message, MessageErr},
-    meta_info::{FromBencodeTypeErr, FromBencodemap},
+    meta_info::FromBencodeTypeErr,
     piece_manager::PieceManager,
 };
 
@@ -49,24 +49,19 @@ pub enum PeerState {
     Idle,
 }
 
-impl FromBencodemap for Peer {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<Self, FromBencodeTypeErr> {
-        if !Self::is_valid_bencodemap(bencode_map) {
-            return Err(FromBencodeTypeErr::MissingValue(String::from(
-                "Missing values for peer",
-            )));
-        }
+impl TryFrom<&BencodeMap> for Peer {
+    type Error = FromBencodeTypeErr;
 
-        // Safe unwraps because we checked the values exist in the map above
+    fn try_from(bencode_map: &BencodeMap) -> Result<Self, Self::Error> {
         let peer_id: Option<String> = bencode_map.get_decode(PEER_ID_KEY);
-        let ip: String = bencode_map.get_decode(IP_KEY).unwrap();
-        let port: i64 = bencode_map.get_decode(PORT_KEY).unwrap();
+        let ip: String = bencode_map
+            .get_decode(IP_KEY)
+            .ok_or(FromBencodeTypeErr::MissingValue(IP_KEY.to_string()))?;
+        let port: i64 = bencode_map
+            .get_decode(PORT_KEY)
+            .ok_or(FromBencodeTypeErr::MissingValue(IP_KEY.to_string()))?;
 
         Ok(Peer::new(peer_id, ip, port))
-    }
-
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
-        bencode_map.contains_key(IP_KEY.as_bytes()) && bencode_map.contains_key(PORT_KEY.as_bytes())
     }
 }
 
@@ -105,7 +100,7 @@ impl Peer {
     pub fn from_bencodemap_list(
         bencode_map: &[BencodeMap],
     ) -> Result<Vec<Self>, FromBencodeTypeErr> {
-        bencode_map.iter().map(Peer::from_bencodemap).collect()
+        bencode_map.iter().map(Peer::try_from).collect()
     }
 
     pub async fn start(

@@ -77,11 +77,6 @@ impl TorrentInfo {
     }
 }
 
-pub trait FromBencodemap: Sized {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<Self, FromBencodeTypeErr>;
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool;
-}
-
 impl TryFrom<&BencodeMap> for FileInfo {
     type Error = FromBencodeTypeErr;
     fn try_from(bencode_map: &BencodeMap) -> Result<Self, Self::Error> {
