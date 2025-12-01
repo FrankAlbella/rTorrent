@@ -19,6 +19,8 @@ pub enum PeerManagerError {
     PeerStartFailed,
     #[error("Tracker error {0}")]
     TrackerError(#[from] TrackerErr),
+    #[error("Tracker returned an error {0}")]
+    TrackerFailureError(String),
 }
 
 #[derive(Debug)]
@@ -91,17 +93,15 @@ impl PeerManager {
         let response =
             tracker::send_get_request(&self.meta_info, tracker::TrackerEvent::Started).await;
         match response {
-            Ok(res) => {
-                if let Some(interval) = res.interval {
+            Ok(res) => match res {
+                tracker::GetResponse::Success { interval, peers } => {
                     self.new_peer_interval = interval as usize;
+                    Ok(peers)
                 }
-
-                if let Some(peers_vec) = res.peers {
-                    Ok(peers_vec)
-                } else {
-                    Err(PeerManagerError::ConnectionFailed)
+                tracker::GetResponse::Failure(message) => {
+                    Err(PeerManagerError::TrackerFailureError(message))
                 }
-            }
+            },
             Err(err) => Err(PeerManagerError::TrackerError(err)),
         }
     }

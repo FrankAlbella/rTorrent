@@ -1,6 +1,6 @@
 use crate::{
     bencode::{BencodeMap, BencodeMapDecoder, BencodeParseErr},
-    meta_info::{FromBencodeTypeErr, FromBencodemap},
+    meta_info::FromBencodeTypeErr,
     peer::Peer,
 };
 use reqwest::{Client, Url};
@@ -31,10 +31,9 @@ struct GetRequest {
 }
 
 #[derive(Debug)]
-pub struct GetResponse {
-    pub interval: Option<i64>,
-    pub peers: Option<Vec<Peer>>,
-    pub failure_reason: Option<String>,
+pub enum GetResponse {
+    Success { interval: i64, peers: Vec<Peer> },
+    Failure(String),
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -47,12 +46,11 @@ pub enum TrackerEvent {
     Stopped,
 }
 
-// TODO implement with thiserror::Error
 #[derive(Debug, Error)]
 pub enum TrackerErr {
     #[error("Invalid meta info")]
     InvalidMetaInfo,
-    #[error("URL parse error")]
+    #[error("URL parse error {0}")]
     UrlParseError(#[from] ParseError),
     #[error("Bencode parse error {0}")]
     BencodeParseErr(#[from] BencodeParseErr),
@@ -62,42 +60,45 @@ pub enum TrackerErr {
     ReqwestError(reqwest::Error),
     #[error("Serde error {0}")]
     SerdeErr(serde_qs::Error),
+    #[error("Tracker error {0}")]
+    TrackerError(String),
 }
 
-impl FromBencodemap for GetResponse {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<Self, FromBencodeTypeErr> {
-        if !Self::is_valid_bencodemap(bencode_map) {
-            return Err(FromBencodeTypeErr::MissingValue(String::from(
-                "Missing values for GetResponse",
-            )));
-        }
+impl TryFrom<&BencodeMap> for GetResponse {
+    type Error = FromBencodeTypeErr;
 
-        let interval: Option<i64> = bencode_map.get_decode(INTERVAL_KEY);
+    fn try_from(bencode_map: &BencodeMap) -> Result<Self, Self::Error> {
         let failure_reason: Option<String> = bencode_map.get_decode(FAILURE_REASON_KEY);
 
-        let peers: Option<Vec<BencodeMap>> = bencode_map.get_decode(PEERS_KEY);
+        if let Some(failure_reason) = failure_reason {
+            return Ok(Self::Failure(failure_reason));
+        }
 
-        let peers_final: Option<Vec<Peer>> = match peers {
-            Some(x) => Some(Peer::from_bencodemap_list(&x)?),
-            None => None,
-        };
+        let interval: i64 =
+            bencode_map
+                .get_decode(INTERVAL_KEY)
+                .ok_or(FromBencodeTypeErr::MissingValue(
+                    "Missing interval value from tracker response".to_string(),
+                ))?;
 
-        Ok(GetResponse {
-            interval,
-            peers: peers_final,
-            failure_reason,
-        })
-    }
+        let peers = bencode_map
+            .get_decode::<Vec<BencodeMap>>(PEERS_KEY)
+            .map(|peer_maps| Peer::from_bencodemap_list(&peer_maps))
+            .transpose()?
+            .ok_or_else(|| {
+                FromBencodeTypeErr::MissingValue(
+                    "Missing peers value from tracker response".to_string(),
+                )
+            })?;
 
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
-        (bencode_map.contains_key(INTERVAL_KEY.as_bytes())
-            && bencode_map.contains_key(PEERS_KEY.as_bytes()))
-            || bencode_map.contains_key(FAILURE_REASON_KEY.as_bytes())
+        Ok(GetResponse::Success { interval, peers })
     }
 }
 
-impl GetRequest {
-    pub fn from_metainfo(meta_info: &MetaInfo) -> Result<Self, TrackerErr> {
+impl TryFrom<&MetaInfo> for GetRequest {
+    type Error = TrackerErr;
+
+    fn try_from(meta_info: &MetaInfo) -> Result<Self, Self::Error> {
         let left = match meta_info.info.is_single_or_multi_file() {
             TorrentType::SingleFile => meta_info.info.length.ok_or(TrackerErr::InvalidMetaInfo)?,
             TorrentType::MultiFile => todo!("Add support for multi-file torrents"),
@@ -130,15 +131,13 @@ pub async fn send_get_request(
         .await
         .map_err(TrackerErr::ReqwestError)?;
 
-    let map = BencodeMap::try_decode(&res).map_err(TrackerErr::BencodeParseErr)?;
+    let map = BencodeMap::try_decode(&res)?;
 
-    let deserial = GetResponse::from_bencodemap(&map).map_err(TrackerErr::FromBencodeTypeErr)?;
-
-    Ok(deserial)
+    Ok(GetResponse::try_from(&map)?)
 }
 
 fn construct_get_url(meta_info: &MetaInfo, event: &TrackerEvent) -> Result<Url, TrackerErr> {
-    let mut payload = GetRequest::from_metainfo(meta_info)?;
+    let mut payload = GetRequest::try_from(meta_info)?;
     payload.event = Some(event.clone());
     let params = serde_qs::to_string(&payload).map_err(TrackerErr::SerdeErr)?;
     let announce = match meta_info.announce.clone() {

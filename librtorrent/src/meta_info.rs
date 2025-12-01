@@ -144,9 +144,8 @@ impl FromBencodemap for TorrentInfo {
         // TODO: rewrite this logic
         let mut final_vec = Vec::new();
         if let Some(files_vec) = files {
-            let iter = files_vec.iter();
-            for x in iter {
-                final_vec.push(FileInfo::from_bencodemap(x)?);
+            for x in files_vec {
+                final_vec.push(FileInfo::from_bencodemap(&x)?);
             }
         }
 
