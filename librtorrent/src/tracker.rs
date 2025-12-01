@@ -1,6 +1,6 @@
 use crate::{
     bencode::{BencodeMap, BencodeMapDecoder, BencodeParseErr},
-    meta_info::FromBencodeTypeErr,
+    meta_info::{FileLayout, FromBencodeTypeErr},
     peer::Peer,
 };
 use reqwest::{Client, Url};
@@ -10,7 +10,7 @@ use thiserror::Error;
 use url::form_urlencoded::byte_serialize;
 use url::ParseError;
 
-use crate::meta_info::{MetaInfo, TorrentType};
+use crate::meta_info::MetaInfo;
 
 // GetResponse keys
 const INTERVAL_KEY: &str = "interval";
@@ -99,9 +99,9 @@ impl TryFrom<&MetaInfo> for GetRequest {
     type Error = TrackerErr;
 
     fn try_from(meta_info: &MetaInfo) -> Result<Self, Self::Error> {
-        let left = match meta_info.info.is_single_or_multi_file() {
-            TorrentType::SingleFile => meta_info.info.length.ok_or(TrackerErr::InvalidMetaInfo)?,
-            TorrentType::MultiFile => todo!("Add support for multi-file torrents"),
+        let left = match &meta_info.info.file_layout {
+            FileLayout::SingleFile { length } => length,
+            FileLayout::MultiFile { files } => todo!("Add support for multi-file torrents"),
         };
 
         Ok(GetRequest {
@@ -110,7 +110,7 @@ impl TryFrom<&MetaInfo> for GetRequest {
             port: 6881,
             uploaded: 0,
             downloaded: 0,
-            left,
+            left: *left,
             event: None,
         })
     }

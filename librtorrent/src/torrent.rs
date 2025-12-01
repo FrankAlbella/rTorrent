@@ -2,7 +2,7 @@ use std::{fs, io, path::PathBuf, sync::Arc};
 
 use crate::{
     bencode::{self, BencodeParseErr, BencodeType},
-    meta_info::{FromBencodeTypeErr, FromBencodemap, MetaInfo},
+    meta_info::{FromBencodeTypeErr, MetaInfo},
     peer_manager::PeerManager,
 };
 
@@ -46,7 +46,7 @@ impl Torrent {
         if let Some(first) = bencode_vec.first() {
             match first {
                 BencodeType::Dictionary(map) => {
-                    let data = MetaInfo::from_bencodemap(map)?;
+                    let data = MetaInfo::try_from(map)?;
                     Ok(Torrent::new(data).await)
                 }
                 _ => Err(TorrentErr::InvalidFile(path.clone())),

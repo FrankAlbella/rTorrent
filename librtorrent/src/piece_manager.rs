@@ -11,7 +11,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::meta_info::MetaInfo;
+use crate::meta_info::{FileLayout, MetaInfo};
 
 //const SAVE_BYTES_THRESHOLD: usize = 1 << 24; // 16 MB in bytes
 const SAVE_BYTES_THRESHOLD: usize = 1 << 20; // 8 MB in bytes
@@ -59,9 +59,9 @@ impl PieceManager {
     }
 
     fn meta_info_to_bitfield(meta_info: &MetaInfo) -> BytesMut {
-        let total_length = match meta_info.info.length {
-            Some(length) => length,
-            None => todo!("Mutli-file torrents are not yet supported!"),
+        let total_length = match &meta_info.info.file_layout {
+            FileLayout::SingleFile { length } => length,
+            FileLayout::MultiFile { files } => todo!("Add support for multifile torrents"),
         };
         let piece_length = meta_info.info.piece_length;
         let num_pieces = (total_length + piece_length - 1) / piece_length;
@@ -268,7 +268,7 @@ impl PieceManager {
 
 #[cfg(test)]
 mod tests {
-    use crate::meta_info::TorrentInfo;
+    use crate::meta_info::{FileLayout, TorrentInfo};
 
     use super::*;
 
@@ -284,8 +284,7 @@ mod tests {
                 name: "test".to_string(),
                 piece_length: 2 << 14,
                 pieces: vec![],
-                length: Some(8),
-                files: None,
+                file_layout: FileLayout::SingleFile { length: 8 },
                 private: None,
             },
         };
@@ -306,8 +305,7 @@ mod tests {
                 name: "test".to_string(),
                 piece_length: 2 << 14,
                 pieces: vec![],
-                length: Some(8),
-                files: None,
+                file_layout: FileLayout::SingleFile { length: 8 },
                 private: None,
             },
         };
@@ -328,8 +326,7 @@ mod tests {
                 name: "test".to_string(),
                 piece_length: 2 << 14,
                 pieces: vec![],
-                length: Some(8),
-                files: None,
+                file_layout: FileLayout::SingleFile { length: 8 },
                 private: None,
             },
         };

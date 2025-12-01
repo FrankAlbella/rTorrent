@@ -9,7 +9,6 @@ const INFO_KEY: &str = "info";
 const NODES_KEY: &str = "nodes";
 const ANNOUNCE_LIST_KEY: &str = "announce-list";
 const URL_LIST_KEY: &str = "url-list";
-const ANNOUNCE_VALUES: [&str; 4] = [ANNOUNCE_KEY, NODES_KEY, ANNOUNCE_LIST_KEY, URL_LIST_KEY];
 
 // Keys for the info dict in the file
 const NAME_KEY: &str = "name";
@@ -19,19 +18,17 @@ const LENGTH_KEY: &str = "length";
 const FILES_KEY: &str = "files";
 const PRIVATE_KEY: &str = "private";
 
-const INFO_XOR_VALUES: [&str; 2] = [LENGTH_KEY, FILES_KEY];
-
 // Heys for the files dict
 const PATH_KEY: &str = "path";
 
 const HASH_SIZE: usize = 20;
 
-const ERROR_MISSING_VALUE: &str = "Map is missing required values";
-
 #[derive(Debug, Error)]
 pub enum FromBencodeTypeErr {
-    #[error("Map is missing required values")]
+    #[error("Map is missing required values {0}")]
     MissingValue(String),
+    #[error("Invalid value for {0}")]
+    InvalidValue(String),
     #[error("Failed to get bencode")]
     BencodeGetErr(#[from] BencodeGetErr),
 }
@@ -54,10 +51,15 @@ pub struct TorrentInfo {
     pub name: String,
     pub piece_length: i64,
     pub pieces: Vec<u8>,
-    pub length: Option<i64>,
-    pub files: Option<Vec<FileInfo>>,
+    pub file_layout: FileLayout,
     //BEP-0027
     pub private: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FileLayout {
+    SingleFile { length: i64 },
+    MultiFile { files: Vec<FileInfo> },
 }
 
 #[derive(Debug, Clone)]
@@ -66,20 +68,7 @@ pub struct FileInfo {
     pub path: Vec<PathBuf>,
 }
 
-#[derive(Debug)]
-pub enum TorrentType {
-    SingleFile,
-    MultiFile,
-}
-
 impl TorrentInfo {
-    pub fn is_single_or_multi_file(&self) -> TorrentType {
-        match self.files.is_none() {
-            true => TorrentType::SingleFile,
-            false => TorrentType::MultiFile,
-        }
-    }
-
     pub fn get_piece_hash(&self, piece_index: usize) -> Option<[u8; HASH_SIZE]> {
         let start = piece_index * HASH_SIZE;
         let end = start + HASH_SIZE;
@@ -93,14 +82,9 @@ pub trait FromBencodemap: Sized {
     fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool;
 }
 
-impl FromBencodemap for FileInfo {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<Self, FromBencodeTypeErr> {
-        if !Self::is_valid_bencodemap(bencode_map) {
-            return Err(FromBencodeTypeErr::MissingValue(String::from(
-                ERROR_MISSING_VALUE,
-            )));
-        }
-
+impl TryFrom<&BencodeMap> for FileInfo {
+    type Error = FromBencodeTypeErr;
+    fn try_from(bencode_map: &BencodeMap) -> Result<Self, Self::Error> {
         let length: i64 = bencode_map
             .get_decode(LENGTH_KEY)
             .ok_or(FromBencodeTypeErr::MissingValue(String::from(LENGTH_KEY)))?;
@@ -110,21 +94,11 @@ impl FromBencodemap for FileInfo {
 
         Ok(FileInfo { length, path })
     }
-
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
-        bencode_map.contains_key(LENGTH_KEY.as_bytes())
-            && bencode_map.contains_key(PATH_KEY.as_bytes())
-    }
 }
 
-impl FromBencodemap for TorrentInfo {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<TorrentInfo, FromBencodeTypeErr> {
-        if !Self::is_valid_bencodemap(bencode_map) {
-            return Err(FromBencodeTypeErr::MissingValue(String::from(
-                ERROR_MISSING_VALUE,
-            )));
-        }
-
+impl TryFrom<&BencodeMap> for TorrentInfo {
+    type Error = FromBencodeTypeErr;
+    fn try_from(bencode_map: &BencodeMap) -> Result<Self, Self::Error> {
         let name: String = bencode_map
             .get_decode(NAME_KEY)
             .ok_or(FromBencodeTypeErr::MissingValue(String::from(NAME_KEY)))?;
@@ -137,99 +111,61 @@ impl FromBencodemap for TorrentInfo {
         let pieces: Vec<u8> = bencode_map
             .get_decode(PIECES_KEY)
             .ok_or(FromBencodeTypeErr::MissingValue(String::from(PIECES_KEY)))?;
-        let length: Option<i64> = bencode_map.get_decode(LENGTH_KEY);
-        let files: Option<Vec<BencodeMap>> = bencode_map.get_decode(FILES_KEY);
         let private: Option<i64> = bencode_map.get_decode(PRIVATE_KEY);
 
-        // TODO: rewrite this logic
-        let mut final_vec = Vec::new();
-        if let Some(files_vec) = files {
-            for x in files_vec {
-                final_vec.push(FileInfo::from_bencodemap(&x)?);
+        let length: Option<i64> = bencode_map.get_decode(LENGTH_KEY);
+        let files: Option<Vec<BencodeMap>> = bencode_map.get_decode(FILES_KEY);
+        let file_layout = match (length, files) {
+            (Some(len), None) => FileLayout::SingleFile { length: len },
+            (None, Some(files)) => FileLayout::MultiFile {
+                files: files
+                    .iter()
+                    .map(FileInfo::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            _ => {
+                return Err(FromBencodeTypeErr::InvalidValue(
+                    "length and files".to_string(),
+                ))
             }
-        }
-
-        let final_file = match final_vec.is_empty() {
-            true => None,
-            false => Some(final_vec),
         };
 
         Ok(TorrentInfo {
             name,
             piece_length,
             pieces,
-            length,
-            files: final_file,
+            file_layout,
             private,
         })
     }
-
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
-        let has_values = bencode_map.keys().any(|k| {
-            if let Ok(s) = std::str::from_utf8(k) {
-                INFO_XOR_VALUES.contains(&s)
-            } else {
-                false
-            }
-        });
-
-        if !has_values {
-            return false;
-        }
-
-        if !bencode_map.contains_key(NAME_KEY.as_bytes()) {
-            return false;
-        }
-
-        true
-    }
 }
 
-impl FromBencodemap for MetaInfo {
-    fn from_bencodemap(bencode_map: &BencodeMap) -> Result<MetaInfo, FromBencodeTypeErr> {
-        if !Self::is_valid_bencodemap(bencode_map) {
-            return Err(FromBencodeTypeErr::MissingValue(String::from(
-                ERROR_MISSING_VALUE,
-            )));
-        }
-
+impl TryFrom<&BencodeMap> for MetaInfo {
+    type Error = FromBencodeTypeErr;
+    fn try_from(bencode_map: &BencodeMap) -> Result<Self, Self::Error> {
         let announce: Option<String> = bencode_map.get_decode(ANNOUNCE_KEY);
         let nodes: Option<Vec<String>> = bencode_map.get_decode(NODES_KEY);
         let announce_list: Option<Vec<String>> = bencode_map.get_decode(ANNOUNCE_LIST_KEY);
         let url_list: Option<Vec<String>> = bencode_map.get_decode(URL_LIST_KEY);
 
+        if announce.is_none() && announce_list.is_none() && nodes.is_none() && url_list.is_none() {
+            return Err(FromBencodeTypeErr::MissingValue(
+                "announce, nodes, announce_list, or url_list key required for MetaInfo".to_string(),
+            ));
+        }
+
         let info: BencodeMap = bencode_map
             .get_decode(INFO_KEY)
-            .ok_or(FromBencodeTypeErr::MissingValue(String::from(INFO_KEY)))?;
+            .ok_or(FromBencodeTypeErr::MissingValue(INFO_KEY.to_string()))?;
 
         Ok(MetaInfo {
             announce,
-            info: TorrentInfo::from_bencodemap(&info)?,
+            info: TorrentInfo::try_from(&info)?,
             nodes,
             announce_list,
             url_list,
             hash: Sha1::digest(info.get_encode()).into(),
         })
-    }
-
-    fn is_valid_bencodemap(bencode_map: &BencodeMap) -> bool {
-        let has_announce = bencode_map.keys().any(|k| {
-            if let Ok(s) = std::str::from_utf8(k) {
-                ANNOUNCE_VALUES.contains(&s)
-            } else {
-                false
-            }
-        });
-
-        if !has_announce {
-            return false;
-        }
-
-        if !bencode_map.contains_key(INFO_KEY.as_bytes()) {
-            return false;
-        }
-
-        true
     }
 }
 
